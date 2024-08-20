@@ -191,5 +191,4 @@ static char *mygets(void *arg, char *buffer, int len) {
   /* Close and Finalise */
   i = armul_rdi.close();
   rdi_state = 0;
-  emu_state = NULL;
 }

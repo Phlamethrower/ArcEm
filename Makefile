@@ -133,8 +133,8 @@ endif
 ifeq (${SYSTEM},riscos-single)
 EXTNROM_SUPPORT=notyet
 DIRECT_DISPLAY=yes
-CFLAGS += -I@ -DSYSTEM_riscos_single -Iriscos-single -mpoke-function-name
-OBJS += arm-support.o rhs.o
+CFLAGS += -I@ -DSYSTEM_riscos_single -Iriscos-single -mpoke-function-name -mtune=xscale -march=armv5te -mthrowback
+#OBJS += arm-support.o rhs.o
 TARGET=!ArcEm/arcem
 endif
 

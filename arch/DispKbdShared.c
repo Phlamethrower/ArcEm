@@ -23,9 +23,6 @@
 
 #define DC DISPLAYCONTROL
 
-static struct EventNode enodes[4];
-static int xpollenode = 2; /* Flips between 2 and 3 */
-
 /**
  * MarkAsUpdated
  *
@@ -207,8 +204,7 @@ DisplayKbd_Init(ARMul_State *state)
   }
 #endif
 
-  ARMul_ScheduleEvent(&enodes[xpollenode], POLLGAP, DisplayKbd_Poll);
-  xpollenode ^= 1;
+  state->Now = ARMul_Time + POLLGAP;
 } /* DisplayKbd_Init */
 
 /* Called using an ARM_ScheduleEvent - it also sets itself up to be called
@@ -237,6 +233,9 @@ DisplayKbd_Poll(void *data)
 
   if ((KbdPollInt++) > 100) {
     KbdPollInt = 0;
+#ifdef __riscos__
+    DisplayKbd_PollHost(state); /* Let's slow this down a bit! */
+#endif
     /* Keyboard check */
     KbdSerialVal = IOC_ReadKbdTx(state);
     if (KbdSerialVal != -1) {
@@ -251,16 +250,17 @@ DisplayKbd_Poll(void *data)
     }
   }
 
+#ifndef __riscos__
   /* Call Host-specific routine */
   if ( DisplayKbd_PollHost(state) )
     KbdPollInt = 1000;
+#endif
 
   if (--(DC.AutoRefresh) < 0) {
     RefreshDisplay(state);
   }
 
-  ARMul_ScheduleEvent(&enodes[xpollenode], POLLGAP, DisplayKbd_Poll);
-  xpollenode ^= 1;
+  state->Now = ARMul_Time + POLLGAP;
 
   return 0;
 } /* DisplayKbd_Poll */
