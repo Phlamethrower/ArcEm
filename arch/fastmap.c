@@ -167,7 +167,7 @@ FASTMAP_FUNC ARMword ARMul_SwapWord(ARMul_State *state, ARMword address, ARMword
 		temp = *phy;
 		*phy = data;
 		*(FastMap_Phy2Func(phy)) = FASTMAP_CLOBBEREDFUNC;
-		return *phy;
+		return temp;
 	}
 	else if(FASTMAP_RESULT_FUNC(res))
 	{
