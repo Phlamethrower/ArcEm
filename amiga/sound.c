@@ -21,7 +21,7 @@ static unsigned long delayProgress = 0;
 static SoundData *buffer = NULL;
 
 void
-sound_poll(void)
+sound_poll(ARMul_State *state)
 {
   delayProgress++;
   if (delayProgress >= delayTotal)
@@ -56,6 +56,8 @@ int openaudio(void)
 		fprintf(stderr, "sound_init(): Out of memory\n");
 		return -1;
 	}
+	
+	return 0;
 }
 
 int
