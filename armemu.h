@@ -261,7 +261,7 @@
 *                      Stuff that is shared across modes                    *
 \***************************************************************************/
 
-void ARMul_Emulate26(ARMul_State *state,unsigned int count);
+void ARMul_Emulate26(ARMul_State *state);
 void ARMul_Icycles(ARMul_State *state,unsigned number);
 
 extern unsigned char ARMul_MultTable[]; /* Number of I cycles for a mult */

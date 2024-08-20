@@ -43,9 +43,6 @@ void arcem_exit(char* msg);
 #include "swis.h"
 #endif
 
-#define USEFASTMAP
-#define USEFASTMAPLOG
-
 #ifdef DIRECT_DISPLAY
 
 extern int *DirectScreenMemory;
@@ -211,10 +208,9 @@ ARMul_MemoryInit(ARMul_State *state, unsigned long initmemsize)
     fprintf(stderr,"Couldn't allocate ROMRAMChunk/EmuFuncChunk\n");
     exit(3);
   }
-  MEMC.FastMapInstrFuncOfs = ((ARMword)MEMC.EmuFuncChunk)-((ARMword)MEMC.ROMRAMChunk);
-  fprintf(stderr,"ROMRAM %08x EmuFunc %08x ofs %08x\n",MEMC.ROMRAMChunk,MEMC.EmuFuncChunk,MEMC.FastMapInstrFuncOfs);
-  /* Get everything 256 byte aligned */
-  MEMC.PhysRam = (ARMword*) ((((ARMword)MEMC.ROMRAMChunk)+255)&~255); /* RAM must come first for FastMap_LogRamFunc to work! */
+  MEMC.FastMapInstrFuncOfs = ((FastMapUInt)MEMC.EmuFuncChunk)-((FastMapUInt)MEMC.ROMRAMChunk);
+  /* Get everything 256 byte aligned for FastMap to work */
+  MEMC.PhysRam = (ARMword*) ((((FastMapUInt)MEMC.ROMRAMChunk)+255)&~255); /* RAM must come first for FastMap_LogRamFunc to work! */
   MEMC.ROMHigh = MEMC.PhysRam + (MEMC.RAMSize>>2);
 
   dbug(" Loading ROM....\n ");
@@ -298,11 +294,11 @@ void ARMul_MemoryExit(ARMul_State *state)
   free(PRIVD);
 }
 
-static void FastMap_SetEntries(ARMword addr,ARMword *data,FastMapAccessFunc func,ARMword flags,ARMword size)
+static void FastMap_SetEntries(ARMword addr,ARMword *data,FastMapAccessFunc func,FastMapUInt flags,ARMword size)
 {
   FastMapEntry *entry = FastMap_GetEntryNoWrap(addr);
 //  fprintf(stderr,"FastMap_SetEntries(%08x,%08x,%08x,%08x,%08x)\n",addr,data,func,flags,size);
-  addr = ((ARMword)data)-addr; /* Offset so we can just add the phy addr to get a pointer back */
+  addr = ((FastMapUInt)data)-addr; /* Offset so we can just add the phy addr to get a pointer back */
   flags |= addr>>8;
 //  fprintf(stderr,"->entry %08x\n->FlagsAndData %08x\n",entry,flags);
   while(size) {
@@ -313,7 +309,7 @@ static void FastMap_SetEntries(ARMword addr,ARMword *data,FastMapAccessFunc func
   }
 }
 
-static void FastMap_SetEntries_Repeat(ARMword addr,ARMword *data,FastMapAccessFunc func,ARMword flags,ARMword size,ARMword totsize)
+static void FastMap_SetEntries_Repeat(ARMword addr,ARMword *data,FastMapAccessFunc func,FastMapUInt flags,ARMword size,ARMword totsize)
 {
   while(totsize > size) {
     FastMap_SetEntries(addr,data,func,flags,size);
@@ -360,7 +356,7 @@ static void ARMul_PurgeFastMapPTIdx(ARMword idx)
     ARMword size=1<<(12+MEMC.PageSizeFlags);
     phys *= size;
     FastMapEntry *entry = FastMap_GetEntryNoWrap(logadr);
-    ARMword addr = ((ARMword)(MEMC.PhysRam+(phys>>2)))-logadr; /* Address part of FlagsAndData */
+    FastMapUInt addr = ((FastMapUInt)(MEMC.PhysRam+(phys>>2)))-logadr; /* Address part of FlagsAndData */
     while(size) {
       if((entry->FlagsAndData<<8) == addr)
         entry->FlagsAndData = 0; /* No need to nuke function pointer */
@@ -458,7 +454,7 @@ static ARMword FastMap_LogRamFunc(ARMul_State *state, ARMword addr,ARMword data,
   *phy = data;
   *(FastMap_Phy2Func(phy)) = FASTMAP_CLOBBEREDFUNC;
   /* Convert pointer to physical addr, then update DMA flags */
-  addr = ((ARMword)phy)-((ARMword)MEMC.PhysRam);
+  addr = (ARMword) (((FastMapUInt)phy)-((FastMapUInt)MEMC.PhysRam));
   FastMap_DMAAbleWrite(addr,data);
 } 
 
@@ -467,7 +463,7 @@ static void ARMul_RebuildFastMapPTIdx(ARMword idx)
   if(MEMC.ROMMapFlag)
     return; /* Still in ROM mode, abort */
 
-  static const ARMword PPL_To_Flags[4] = {
+  static const FastMapUInt PPL_To_Flags[4] = {
   FASTMAP_R_USR|FASTMAP_R_OS|FASTMAP_R_SVC|FASTMAP_W_USR|FASTMAP_W_OS|FASTMAP_W_SVC, /* PPL 00 */
   FASTMAP_R_USR|FASTMAP_R_OS|FASTMAP_R_SVC|FASTMAP_W_OS|FASTMAP_W_SVC,  /* PPL 01 */
   FASTMAP_R_OS|FASTMAP_R_SVC|FASTMAP_W_SVC,  /* PPL 10 */
@@ -633,7 +629,7 @@ static ARMword FastMap_PhysRamFunc(ARMul_State *state, ARMword addr,ARMword data
   case FASTMAP_ACCESSFUNC_WRITE|FASTMAP_ACCESSFUNC_BYTE:
     {
       ARMword shift = ((addr&3)<<3);
-      phy = (ARMword*)(((ARMword)phy)&~3);
+      phy = (ARMword*)(((FastMapUInt)phy)&~3);
       data = (data&0xff)<<shift;
       data |= (*phy) &~ (0xff<<shift);
     }
@@ -694,9 +690,12 @@ static ARMword FastMap_VIDCFunc(ARMul_State *state, ARMword addr,ARMword data,AR
     VIDC_PutVal(state,addr,data,flags&FASTMAP_ACCESSFUNC_BYTE);
     return 0;
   }
-  data = MEMC.ROMLow[(addr & MEMC.ROMLowMask)>>2];
-  if(flags & FASTMAP_ACCESSFUNC_BYTE)
-    data = (data>>((addr&3)<<3))&0xff;
+  if(MEMC.ROMLow)
+  {
+    data = MEMC.ROMLow[(addr & MEMC.ROMLowMask)>>2];
+    if(flags & FASTMAP_ACCESSFUNC_BYTE)
+      data = (data>>((addr&3)<<3))&0xff;
+  }
   return data;
 }
 
@@ -716,9 +715,11 @@ static ARMword FastMap_DMAFunc(ARMul_State *state, ARMword addr,ARMword data,ARM
     return 0;
   }
   if(MEMC.ROMLow)
+  {
     data = MEMC.ROMLow[(addr & MEMC.ROMLowMask)>>2];
-  if(flags & FASTMAP_ACCESSFUNC_BYTE)
-    data = (data>>((addr&3)<<3))&0xff;
+    if(flags & FASTMAP_ACCESSFUNC_BYTE)
+      data = (data>>((addr&3)<<3))&0xff;
+  }
   return data;
 }
 
@@ -738,9 +739,11 @@ static ARMword FastMap_MEMCFunc(ARMul_State *state, ARMword addr,ARMword data,AR
     return 0;
   }
   if(MEMC.ROMHigh)
+  {
     data = MEMC.ROMHigh[(addr & MEMC.ROMHighMask)>>2];
-  if(flags & FASTMAP_ACCESSFUNC_BYTE)
-    data = (data>>((addr&3)<<3))&0xff;
+    if(flags & FASTMAP_ACCESSFUNC_BYTE)
+      data = (data>>((addr&3)<<3))&0xff;
+  }
   return data;
 }
 
@@ -835,7 +838,7 @@ static void ARMul_RebuildFastMap(void)
  * @returns 0 if the fetch was done, 1 if sound dma is disabled and so no fetch was done.
  */
 int
-SoundDMAFetch(SoundData *buffer)
+SoundDMAFetch(SoundData *buffer, ARMul_State *state)
 {
   int i;
   if ((MEMC.ControlReg & (1 << 11)) == 0) {
@@ -843,7 +846,7 @@ SoundDMAFetch(SoundData *buffer)
   }
 
   if(numberOfChannels==0)
-    SoundUpdateStereoImage();
+    SoundUpdateStereoImage(state);
 
   for (i = 0; i < 16; i += numberOfChannels) {
     int j;
@@ -877,7 +880,7 @@ SoundDMAFetch(SoundData *buffer)
       MEMC.SendN = swap;
 
       ioc.IRQStatus |= IRQB_SIRQ; /* Take sound interrupt on */
-      IO_UpdateNirq();
+      IO_UpdateNirq(state);
 
       MEMC.NextSoundBufferValid = 0;
       return 1;
@@ -969,7 +972,7 @@ SoundInitTable(void)
  * meaning depending on the number of channels in use.
  */
 void
-SoundUpdateStereoImage(void)
+SoundUpdateStereoImage(ARMul_State *state)
 {
   int i = 0;
 
@@ -1049,11 +1052,11 @@ SoundUpdateStereoImage(void)
     channelAmount[i][1] /= numberOfChannels;
   }
 
-  SoundUpdateSampleRate();
+  SoundUpdateSampleRate(state);
 }
 
 void
-SoundUpdateSampleRate(void)
+SoundUpdateSampleRate(ARMul_State *state)
 {
   /* SFR = (N - 2) where N is sample period in microseconds. */
   if (numberOfChannels != 8) {
@@ -1065,5 +1068,5 @@ SoundUpdateSampleRate(void)
 #endif
 
 #ifndef FASTMAP_INLINE
-#include "fastmap.c"
+#include "arch/fastmap.c"
 #endif

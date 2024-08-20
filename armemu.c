@@ -20,9 +20,6 @@
 #include "armdefs.h"
 #include "armemu.h"
 
-#include "kernel.h"
-#include "swis.h"
-
 ARMul_State statestr;
 
 /* global used to terminate the emulator */
@@ -1017,20 +1014,13 @@ PipelineEntry abortpipe = {
   EMFUNCDECL26(SWI)
 };
 
-//#define LOGIT
-
 #define PIPESIZE 4 /* 3 or 4. 4 seems to be slightly faster? */
 
 void
-ARMul_Emulate26(ARMul_State *state,unsigned int count)
+ARMul_Emulate26(ARMul_State *state)
 {
   PipelineEntry pipe[PIPESIZE];   /* Instruction pipeline */
   ARMword pc = 0;          /* The address of the current instruction */
-
-#ifdef LOGIT
-  ARMword *log = malloc(count*8);
-  ARMword *logpos = log;
-#endif
 
   /**************************************************************************\
    *                        Execute the next instruction                    *
@@ -1042,7 +1032,6 @@ ARMul_Emulate26(ARMul_State *state,unsigned int count)
       pipe[2].instr = state->loaded;
       pc            = state->pc;
 
-//      pipe[0].func = ARMul_Emulate_DecodeInstr(pipe[0].instr);
       pipe[1].func = ARMul_Emulate_DecodeInstr(pipe[1].instr);
       pipe[2].func = ARMul_Emulate_DecodeInstr(pipe[2].instr);
 
@@ -1111,22 +1100,9 @@ ARMul_Emulate26(ARMul_State *state,unsigned int count)
 
       ARMword instr = pipe[pipeidx].instr;
       /*fprintf(stderr, "exec: pc=0x%08x instr=0x%08x\n", pc, instr);*/
-#ifdef LOGIT
-      *logpos++ = pc;
-      *logpos++ = instr;
-#endif
       if(ARMul_CCCheck(instr,ECC))
         (pipe[pipeidx].func)(state, instr, pc);
 
-#if 0
-      if(!--count)
-      {
-#ifdef LOGIT
-        _swix(OS_File,_INR(0,5),10,"<arcem$dir>.log",0,0,log,logpos);
-#endif
-        return;
-      }
-#endif
     } /* for loop */
 
     state->decoded = pipe[(pipeidx+1)%PIPESIZE].instr;

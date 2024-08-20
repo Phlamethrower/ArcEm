@@ -28,7 +28,7 @@ sound_poll(void)
 	{
 	    delayProgress = 0;
 
-	      if (SoundDMAFetch(buffer) == 1)
+	      if (SoundDMAFetch(buffer, state) == 1)
 			{
         		return;
       		}
@@ -53,6 +53,7 @@ int openaudio(void)
 	}
 	else
 	{
+		fprintf(stderr, "sound_init(): Out of memory\n");
 		return -1;
 	}
 }
@@ -68,6 +69,7 @@ sound_init(void)
 	}
 	else
 	{
+		fprintf(stderr, "sound_init(): Could not open utility.library v51\n");
 		return -1;
 	}
 

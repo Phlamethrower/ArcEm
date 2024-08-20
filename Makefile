@@ -59,8 +59,12 @@ ifeq ($(PROFILE),yes)
 CFLAGS = -O -g -pg -ftest-coverage -fprofile-arcs
 LIBS += -lgcov
 else
+ifeq ($(DEBUG),yes)
+CFLAGS += -O0 -g
+else
 CFLAGS = -O3 -funroll-loops -fexpensive-optimizations -ffast-math \
     -fomit-frame-pointer -frerun-cse-after-loop
+endif
 endif
 
 CFLAGS += \

@@ -104,7 +104,9 @@ static char *mygets(void *arg, char *buffer, int len) {
  void dagstandalone(void) {
   int i;
 #ifndef WIN32
+#ifndef AMIGA
   struct sigaction action;
+#endif
 #endif
   PointHandle point;
   Dbg_ConfigBlock config;

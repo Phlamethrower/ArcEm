@@ -72,7 +72,7 @@ struct ARMul_State {
    ARMword AbortAddr;         /* to keep track of Prefetch aborts */
    unsigned Exception;        /* IRQ & FIQ pins */
    unsigned long Now;         /* time next event should be triggered */
-   void *MemDataPtr;          /* VIDC */
+   void *MemDataPtr;          /* VIDC/DisplayInfo struct */
    ARMword Bank;              /* the current register bank */
    unsigned NtransSig;        /* MEMC USR/SVC flag, somewhat redundant with FastMapMode */
    ARMword Base;              /* extra hand for base writeback */

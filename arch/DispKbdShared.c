@@ -219,7 +219,7 @@ DisplayKbd_Poll(void *data)
   static int discconttog = 0;
 
 #ifdef SOUND_SUPPORT
-  sound_poll();
+  sound_poll(state);
 #endif
 
 #ifndef SYSTEM_gp2x
@@ -233,9 +233,8 @@ DisplayKbd_Poll(void *data)
 
   if ((KbdPollInt++) > 100) {
     KbdPollInt = 0;
-#ifdef __riscos__
-    DisplayKbd_PollHost(state); /* Let's slow this down a bit! */
-#endif
+    /* Call host-specific routine */
+    DisplayKbd_PollHost(state);
     /* Keyboard check */
     KbdSerialVal = IOC_ReadKbdTx(state);
     if (KbdSerialVal != -1) {
@@ -249,12 +248,6 @@ DisplayKbd_Poll(void *data)
       }
     }
   }
-
-#ifndef __riscos__
-  /* Call Host-specific routine */
-  if ( DisplayKbd_PollHost(state) )
-    KbdPollInt = 1000;
-#endif
 
   if (--(DC.AutoRefresh) < 0) {
     RefreshDisplay(state);

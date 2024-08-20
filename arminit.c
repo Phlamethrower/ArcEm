@@ -16,7 +16,6 @@
     Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA. */
 
 #include <stdio.h>
-#include <time.h>
 #include "armdefs.h"
 #include "armemu.h"
 #include "armarc.h"
@@ -147,11 +146,7 @@ void ARMul_Reset(ARMul_State *state)
 ARMword ARMul_DoProg(ARMul_State *state) {
   ARMword pc = 0;
 
-  unsigned int t = clock();
-#define MILLIONS 50
-  ARMul_Emulate26(state,MILLIONS*1000000);
-  unsigned int t2 = clock();
-  printf("%f MIPS\n",((float)(CLOCKS_PER_SEC*MILLIONS))/((float)(t2-t)));
+  ARMul_Emulate26(state);
   return(pc);
 }
 
@@ -196,39 +191,53 @@ void ARMul_Abort(ARMul_State *state, ARMword vector) {
 #define ARCEM_SWI_SHUTDOWN (ARCEM_SWI_CHUNK + 0)
 #define ARCEM_SWI_DEBUG    (ARCEM_SWI_CHUNK + 2)
     case ARMul_SWIV: /* Software Interrupt */
-#if 0 /* TODO - Fix! */
-      if ((GetWord(ARMul_GetPC(state) - 8) & 0xfdffc0) == ARCEM_SWI_CHUNK) {
-        switch (GetWord(ARMul_GetPC(state) - 8) & 0xfdffff) {
-        case ARCEM_SWI_SHUTDOWN:
+       {
+         ARMword addr = ARMul_GetPC(state)-8;
+         FastMapEntry *entry = FastMap_GetEntryNoWrap(addr);
+         FastMapRes res = FastMap_DecodeRead(entry,MEMC.FastMapMode);
+         ARMword instr;
+         if(FASTMAP_RESULT_DIRECT(res))
+         {
+           instr = *(FastMap_Log2Phy(entry,addr));
+         }
+         else if(FASTMAP_RESULT_FUNC(res))
+         {
+           instr = FastMap_LoadFunc(entry,state,addr);
+         }
+         else
+           instr = 0; /* This should never happen! */
+         if ((instr & 0xfdffc0) == ARCEM_SWI_CHUNK) {
+           switch (instr & 0xfdffff) {
+           case ARCEM_SWI_SHUTDOWN:
 #ifdef AMIGA
-          cleanup();
+             cleanup();
 #endif
-          exit(state->Reg[0] & 0xff);
-          break;
-        case ARCEM_SWI_DEBUG:
-          fprintf(stderr, "r0 = %08x  r4 = %08x  r8  = %08x  r12 = %08x\n"
-                          "r1 = %08x  r5 = %08x  r9  = %08x  sp  = %08x\n"
-                          "r2 = %08x  r6 = %08x  r10 = %08x  lr  = %08x\n"
-                          "r3 = %08x  r7 = %08x  r11 = %08x  pc  = %08x\n"
-			  "\n",
-            state->Reg[0], state->Reg[4], state->Reg[8], state->Reg[12],
-            state->Reg[1], state->Reg[5], state->Reg[9], state->Reg[13],
-            state->Reg[2], state->Reg[6], state->Reg[10], state->Reg[14],
-            state->Reg[3], state->Reg[7], state->Reg[11], state->Reg[15]);
-          {
-            unsigned p;
-
-            for (p = state->Reg[15]; p < state->Reg[15] + 16; p += 4) {
-            }
-          }
-          break;
-        }
-      }
-#endif
-      SETABORT(R15IBIT,SVC26MODE);
-      ARMul_R15Altered(state);
-      state->Reg[14] = temp - 4;
-      break;
+             exit(state->Reg[0] & 0xff);
+             break;
+           case ARCEM_SWI_DEBUG:
+             fprintf(stderr, "r0 = %08x  r4 = %08x  r8  = %08x  r12 = %08x\n"
+                             "r1 = %08x  r5 = %08x  r9  = %08x  sp  = %08x\n"
+                             "r2 = %08x  r6 = %08x  r10 = %08x  lr  = %08x\n"
+                             "r3 = %08x  r7 = %08x  r11 = %08x  pc  = %08x\n"
+                           "\n",
+               state->Reg[0], state->Reg[4], state->Reg[8], state->Reg[12],
+               state->Reg[1], state->Reg[5], state->Reg[9], state->Reg[13],
+               state->Reg[2], state->Reg[6], state->Reg[10], state->Reg[14],
+               state->Reg[3], state->Reg[7], state->Reg[11], state->Reg[15]);
+             {
+               unsigned p;
+   
+               for (p = state->Reg[15]; p < state->Reg[15] + 16; p += 4) {
+               }
+             }
+             break;
+           }
+         }
+         SETABORT(R15IBIT,SVC26MODE);
+         ARMul_R15Altered(state);
+         state->Reg[14] = temp - 4;
+       }
+       break;
 
     case ARMul_PrefetchAbortV : /* Prefetch Abort */
        state->AbortAddr = 1;

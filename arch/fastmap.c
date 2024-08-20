@@ -55,6 +55,9 @@ FASTMAP_FUNC ARMword ARMul_LoadByte(ARMul_State *state,ARMword address)
 	ARMul_CLEARABORT; /* More likely to clear the abort than not */
 	if(FASTMAP_RESULT_DIRECT(res))
 	{
+#ifdef HOST_BIGENDIAN
+		address ^= 3;
+#endif
 		return *((unsigned char*)FastMap_Log2Phy(entry,address));
 	}
 	else if(FASTMAP_RESULT_FUNC(res))
@@ -121,9 +124,12 @@ FASTMAP_FUNC void ARMul_StoreByte(ARMul_State *state, ARMword address, ARMword d
 	ARMul_CLEARABORT;
 	if(FASTMAP_RESULT_DIRECT(res))
 	{
+#ifdef HOST_BIGENDIAN
+		address ^= 3;
+#endif
 		ARMword *phy = FastMap_Log2Phy(entry,address);
-		*((char *)phy) = data;
-		*(FastMap_Phy2Func((ARMword*)((ARMword)phy&~3))) = FASTMAP_CLOBBEREDFUNC; 
+		*((unsigned char *)phy) = data;
+		*(FastMap_Phy2Func((ARMword*)((FastMapUInt)phy&~3))) = FASTMAP_CLOBBEREDFUNC;
 	}
 	else if(FASTMAP_RESULT_FUNC(res))
 	{
@@ -199,11 +205,14 @@ FASTMAP_FUNC ARMword ARMul_SwapByte(ARMul_State *state, ARMword address, ARMword
 	ARMul_CLEARABORT;
 	if(FASTMAP_RESULT_DIRECT(res))
 	{
+#ifdef HOST_BIGENDIAN
+		address ^= 3;
+#endif
 		ARMword *phy = FastMap_Log2Phy(entry,address);
-		temp = *((char *)phy);
-		*((char *)phy) = data;
-		*(FastMap_Phy2Func((ARMword*)((ARMword)phy&~3))) = FASTMAP_CLOBBEREDFUNC;
-		return *phy;
+		temp = *((unsigned char *)phy);
+		*((unsigned char *)phy) = data;
+		*(FastMap_Phy2Func((ARMword*)((FastMapUInt)phy&~3))) = FASTMAP_CLOBBEREDFUNC;
+		return temp;
 	}
 	else if(FASTMAP_RESULT_FUNC(res))
 	{

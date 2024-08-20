@@ -32,26 +32,42 @@ typedef void (*ARMEmuFunc)(ARMul_State *state, ARMword instr, ARMword pc);
 
 ARMEmuFunc ARMul_Emulate_DecodeInstr(ARMword instr);
 
-/* The fast map encodes the page access flags, memory pointer, and read/write function pointers into just two words of data
+/* The fast map encodes the page access flags, memory pointer, and read/write function pointers into just two words of data (8 bytes on 32bit platforms, 16 bytes on 64bit)
    The first word contains the access flags and memory pointer
    The second word contains the read/write func pointer (combined function under the assumption that MMIO read/write will be infrequent)
 */
 
+#ifndef FASTMAP_64
+#ifdef __LP64__
+#define FASTMAP_64
+#endif
+#endif
+
+#ifdef FASTMAP_64
+typedef signed long int FastMapInt;
+typedef unsigned long int FastMapUInt;
+#define FASTMAP_FLAG(X) (((FastMapUInt)(X))<<56) /* Shift a byte to the top byte of the word */
+#else
+typedef signed int FastMapInt;
+typedef unsigned int FastMapUInt;
+#define FASTMAP_FLAG(X) (((FastMapUInt)(X))<<24) /* Shift a byte to the top byte of the word */
+#endif
+
 #define FASTMAP_SIZE (0x4000000/4096)
 
-#define FASTMAP_R_FUNC 0x80000000UL /* Use function for reading */
-#define FASTMAP_W_FUNC 0x40000000UL /* Use function for writing */
-#define FASTMAP_R_SVC  0x20000000UL /* Page has SVC read access */
-#define FASTMAP_W_SVC  0x10000000UL /* Page has SVC write access */
-#define FASTMAP_R_OS   0x08000000UL /* Page has OS read access */
-#define FASTMAP_W_OS   0x04000000UL /* Page has OS write access */
-#define FASTMAP_R_USR  0x02000000UL /* Page has USR read access */
-#define FASTMAP_W_USR  0x01000000UL /* Page has USR write access */
+#define FASTMAP_R_FUNC FASTMAP_FLAG(0x80) /* Use function for reading */
+#define FASTMAP_W_FUNC FASTMAP_FLAG(0x40) /* Use function for writing */
+#define FASTMAP_R_SVC  FASTMAP_FLAG(0x20) /* Page has SVC read access */
+#define FASTMAP_W_SVC  FASTMAP_FLAG(0x10) /* Page has SVC write access */
+#define FASTMAP_R_OS   FASTMAP_FLAG(0x08) /* Page has OS read access */
+#define FASTMAP_W_OS   FASTMAP_FLAG(0x04) /* Page has OS write access */
+#define FASTMAP_R_USR  FASTMAP_FLAG(0x02) /* Page has USR read access */
+#define FASTMAP_W_USR  FASTMAP_FLAG(0x01) /* Page has USR write access */
 
-#define FASTMAP_MODE_USR 0x02000000UL /* We are in user mode */
-#define FASTMAP_MODE_OS  0x08000000UL /* The OS flag is set in the control register */
-#define FASTMAP_MODE_SVC 0x20000000UL /* We are in SVC mode */
-#define FASTMAP_MODE_MBO 0x80000000UL /* Must be one! */
+#define FASTMAP_MODE_USR FASTMAP_FLAG(0x02) /* We are in user mode */
+#define FASTMAP_MODE_OS  FASTMAP_FLAG(0x08) /* The OS flag is set in the control register */
+#define FASTMAP_MODE_SVC FASTMAP_FLAG(0x20) /* We are in SVC mode */
+#define FASTMAP_MODE_MBO FASTMAP_FLAG(0x80) /* Must be one! */
 
 #define FASTMAP_ACCESSFUNC_WRITE       0x01UL
 #define FASTMAP_ACCESSFUNC_BYTE        0x02UL
@@ -59,12 +75,12 @@ ARMEmuFunc ARMul_Emulate_DecodeInstr(ARMword instr);
 
 #define FASTMAP_CLOBBEREDFUNC 0 /* Value written when a func gets clobbered */
 
-typedef signed int FastMapRes; /* signed int same size as ARMword */
+typedef FastMapInt FastMapRes; /* Result of a DecodeRead/DecodeWrite function */
 
 typedef ARMword (*FastMapAccessFunc)(ARMul_State *state,ARMword addr,ARMword data,ARMword flags);
 
 typedef struct {
-  ARMword FlagsAndData;
+  FastMapUInt FlagsAndData;
   FastMapAccessFunc AccessFunc;
 } FastMapEntry;
 
@@ -101,8 +117,8 @@ struct MEMCStruct {
                                                            each block of DMAble RAM
                                                            incremented on a write */
 
-  ARMword FastMapMode; /* Current access mode flags */
-  ARMword FastMapInstrFuncOfs; /* Offset between the RAM/ROM data and the ARMEmuFunc data */
+  FastMapUInt FastMapMode; /* Current access mode flags */
+  FastMapUInt FastMapInstrFuncOfs; /* Offset between the RAM/ROM data and the ARMEmuFunc data */
   FastMapEntry FastMap[FASTMAP_SIZE];
   void *ROMRAMChunk;
   void *EmuFuncChunk;
@@ -157,13 +173,13 @@ static inline FastMapRes FastMap_DecodeWrite(const FastMapEntry *entry,ARMword m
 static inline ARMword *FastMap_Log2Phy(const FastMapEntry *entry,ARMword addr)
 {
 	/* Returns physical (i.e. real) pointer assuming read/write check returned >0 and addr is properly within range */
-	return (ARMword*)(addr+(entry->FlagsAndData<<8));
+	return (ARMword*)(((FastMapUInt)addr)+(entry->FlagsAndData<<8));
 }
 
 static inline ARMEmuFunc *FastMap_Phy2Func(ARMword *addr)
 {
 	/* Return ARMEmuFunc * for an address returned by Log2Phy */
-	return (ARMEmuFunc*)(((ARMword)addr)+MEMC.FastMapInstrFuncOfs);
+	return (ARMEmuFunc*)(((FastMapUInt)addr)+MEMC.FastMapInstrFuncOfs);
 }
 
 static inline ARMword FastMap_LoadFunc(const FastMapEntry *entry,ARMul_State *state,ARMword addr)
@@ -186,7 +202,7 @@ static inline void FastMap_RebuildMapMode(ARMul_State *state)
 /* Macros to evaluate DecodeRead/DecodeWrite results
    These are all mutually exclusive, so a standard DIRECT -> FUNC -> ABORT check doesn't need to explicitly check for abort */
 #define FASTMAP_RESULT_DIRECT(res) ((res) > 0)
-#define FASTMAP_RESULT_FUNC(res) (((ARMword)(res)) > 0x80000000UL)
+#define FASTMAP_RESULT_FUNC(res) (((FastMapUInt)(res)) > FASTMAP_MODE_MBO)
 #define FASTMAP_RESULT_ABORT(res) (((res)<<1)==0)
 
 /* ------------------- inlined higher-level memory funcs ---------------------- */
@@ -206,7 +222,7 @@ FASTMAP_PROTO ARMword ARMul_SwapWord(ARMul_State *state, ARMword address, ARMwor
 FASTMAP_PROTO ARMword ARMul_SwapByte(ARMul_State *state, ARMword address, ARMword data);
 
 #ifdef FASTMAP_INLINE
-#include "fastmap.c"
+#include "arch/fastmap.c"
 #endif
 
 /**
@@ -242,9 +258,9 @@ int ArmArc_ReadKbdTx(ARMul_State *state);
 int ArmArc_WriteKbdRx(ARMul_State *state, unsigned char value);
 
 #ifdef SOUND_SUPPORT
-int SoundDMAFetch(SoundData *buffer);
-void SoundUpdateStereoImage(void);
-void SoundUpdateSampleRate(void);
+int SoundDMAFetch(SoundData *buffer, ARMul_State *state);
+void SoundUpdateStereoImage(ARMul_State *state);
+void SoundUpdateSampleRate(ARMul_State *state);
 #endif
 
 
