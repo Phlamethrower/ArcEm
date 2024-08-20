@@ -320,6 +320,8 @@ static void FastMap_SetEntries_Repeat(ARMword addr,ARMword *data,FastMapAccessFu
   FastMap_SetEntries(addr,data,func,flags,totsize);
 }
 
+static void ARMul_RebuildFastMapPTIdx(ARMword idx);
+
 static void ARMul_PurgeFastMapPTIdx(ARMword idx)
 {
   if(MEMC.ROMMapFlag)
@@ -328,40 +330,68 @@ static void ARMul_PurgeFastMapPTIdx(ARMword idx)
   int pt = MEMC.PageTable[idx];
   if(pt>0)
   {
-    ARMword logadr,phys;
+    ARMword logadr,phys,mask;
     switch(MEMC.PageSizeFlags) {
       case MEMC_PAGESIZE_O_4K:
         phys = pt & 127;
         logadr = (pt & 0x7ff000)
               | ((pt & 0x000c00)<<13);
+        mask = 0x7ffc00;
         break;
       case MEMC_PAGESIZE_1_8K:
         phys = ((pt>>1) & 0x3f) | ((pt & 1) << 6);
         logadr = (pt & 0x7fe000)
               | ((pt & 0x000c00)<<13);
+        mask = 0x7fec00;
         break;
       case MEMC_PAGESIZE_2_16K:
         phys = ((pt>>2) & 0x1f) | ((pt & 3) << 5);
         logadr = (pt & 0x7fc000)
               | ((pt & 0x000c00)<<13);
+        mask = 0x7fcc00;
         break;
       case MEMC_PAGESIZE_3_32K:
         phys = ((pt>>3) & 0xf) | ((pt&1)<<4) | ((pt&2)<<5) | ((pt&4)<<3) | (pt&0x80) | ((pt>>4)&0x100);
         logadr = (pt & 0x7f8000)
               | ((pt & 0x000c00)<<13);
+        mask = 0x7f8c00;
         break;
     }
-    /* To cope with multiple physical pages being mapped to the same logical address, we need to check each fastmap entry maps to the location we expect before wiping it
-       For extra paranoia we'll check all the relevant fastmap entries, although in reality we should only need to check the first, since the entire map will be rebuilt if the page size changes */
     ARMword size=1<<(12+MEMC.PageSizeFlags);
     phys *= size;
     FastMapEntry *entry = FastMap_GetEntryNoWrap(logadr);
+    
+    /* To cope with multiply mapped pages (i.e. multiple physical pages mapping to the same logical page) we need to check if the page we're about to unmap is still owned by us
+       If it is owned by us, we'll have to search the page tables for a replacement (if any)
+       Otherwise we don't need to do anything at all
+       Note that we only need to check the first page for ownership, because any change to the page size will result in the full map being rebuilt */
+       
     FastMapUInt addr = ((FastMapUInt)(MEMC.PhysRam+(phys>>2)))-logadr; /* Address part of FlagsAndData */
-    while(size) {
-      if((entry->FlagsAndData<<8) == addr)
-        entry->FlagsAndData = 0; /* No need to nuke function pointer */
-      entry++;
-      size -= 4096;
+    if((entry->FlagsAndData<<8) == addr)
+    {
+      /* We own this page */
+      ARMword idx2;
+      pt &= mask;
+      for(idx2=0;idx2<512;idx2++)
+      {
+        if(idx2 != idx)
+        {
+          int pt2 = MEMC.PageTable[idx2];
+          if((pt2 > 0) && ((pt2 & mask) == pt))
+          {
+            /* We've found a suitable replacement */
+            ARMul_RebuildFastMapPTIdx(idx2); /* Take the easy way out */
+            return;
+          }
+        }
+      }
+      /* No replacement found, so just nuke this entry */
+      while(size) {
+        if((entry->FlagsAndData<<8) == addr)
+          entry->FlagsAndData = 0; /* No need to nuke function pointer */
+        entry++;
+        size -= 4096;
+      }
     }    
   }
 }
