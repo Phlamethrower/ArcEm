@@ -29,7 +29,9 @@ unsigned char ARMul_MultTable[32] = { 1,  2,  2,  3,  3,  4,  4,  5,
                                      9, 10, 10, 11, 11, 12, 12, 13,
                                     13, 14, 14, 15, 15, 16, 16, 16};
 
+#ifdef ARMUL_USE_IMMEDTABLE
 ARMword ARMul_ImmedTable[4096]; /* immediate DP LHS values */
+#endif
 char ARMul_BitList[256]; /* number of bits in a byte table */
 
 unsigned int ARMul_CCTable[16];
@@ -41,9 +43,11 @@ unsigned int ARMul_CCTable[16];
 void ARMul_EmulateInit(void) {
   unsigned int i, j;
 
+#ifdef ARMUL_USE_IMMEDTABLE
   for (i = 0; i < 4096; i++) { /* the values of 12 bit dp rhs's */
     ARMul_ImmedTable[i] = ROTATER(i & 0xffL,(i >> 7L) & 0x1eL);
   }
+#endif
 
   for (i = 0; i < 256; ARMul_BitList[i++] = 0 ); /* how many bits in LSM */
   for (j = 1; j < 256; j <<= 1)

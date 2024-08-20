@@ -15,6 +15,14 @@
     along with this program; if not, write to the Free Software
     Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA. */
 
+/* Control the use of the immediate constant table (ARMul_ImmedTable)
+   On ARM we don't want to use it, as it's about 8% slower than using the barrel shifter directly
+   Other platforms with decent a rotate right instruction may want to avoid using the table too
+*/
+#ifndef __arm__
+#define ARMUL_USE_IMMEDTABLE
+#endif
+
 /***************************************************************************\
 *                           Condition code values                           *
 \***************************************************************************/
@@ -185,11 +193,19 @@
 #define MULRHSReg (BITS(8,11))
 #define MULACCReg (BITS(12,15))
 
+#ifdef ARMUL_USE_IMMEDTABLE
 #define DPImmRHS (ARMul_ImmedTable[BITS(0,11)])
 #define DPSImmRHS temp = BITS(0,11); \
                   rhs = ARMul_ImmedTable[temp]; \
                   if (temp > 255) /* there was a shift */ \
                      ASSIGNC(rhs >> 31);
+#else
+#define DPImmRHS (ROTATER(BITS(0,7),BITS(8,11)<<1))
+#define DPSImmRHS temp = BITS(0,11); \
+                  rhs = ROTATER(BITS(0,7),BITS(8,11)<<1); \
+                  if (temp > 255) /* there was a shift */ \
+                     ASSIGNC(rhs >> 31);
+#endif
 
 #define DPRegRHS ((BITS(0,11)<15) ? state->Reg[RHSReg] \
                                   : GetDPRegRHS(state, instr))
@@ -265,7 +281,9 @@ void ARMul_Emulate26(ARMul_State *state);
 void ARMul_Icycles(ARMul_State *state,unsigned number);
 
 extern unsigned char ARMul_MultTable[]; /* Number of I cycles for a mult */
+#ifdef ARMUL_USE_IMMEDTABLE
 extern ARMword ARMul_ImmedTable[]; /* Immediate DP LHS values */
+#endif
 extern char ARMul_BitList[];       /* Number of bits in a byte table */
 extern unsigned int ARMul_CCTable[16];
 #define ARMul_CCCheck(instr,psr) (ARMul_CCTable[instr>>28] & (1<<(psr>>28)))
