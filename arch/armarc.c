@@ -117,7 +117,6 @@ static void DumpHandler(ARMul_State *state,int sig) {
 unsigned
 ARMul_MemoryInit(ARMul_State *state)
 {
-  PrivateDataType *PrivDPtr;
   FILE *ROMFile;
   unsigned int ROMWordNum, ROMWord;
   int PresPage;
@@ -161,13 +160,11 @@ ARMul_MemoryInit(ARMul_State *state)
       exit(EXIT_FAILURE);
   }
 
-  PrivDPtr = calloc(sizeof(PrivateDataType), 1);
-  if (PrivDPtr == NULL) {
-    fprintf(stderr,"ARMul_MemoryInit: malloc of PrivateDataType failed\n");
+  state->Display = calloc(sizeof(DisplayInfo), 1);
+  if (state->Display == NULL) {
+    fprintf(stderr,"ARMul_MemoryInit: malloc of DisplayInfo failed\n");
     exit(3);
   }
-
-  state->MemDataPtr = (unsigned char *)PrivDPtr;
 
   dbug("Reading config file....\n");
   ReadConfigFile(state);
@@ -312,7 +309,7 @@ void ARMul_MemoryExit(ARMul_State *state)
 {
   free(MEMC.ROMRAMChunk);
   free(MEMC.EmuFuncChunk);
-  free(PRIVD);
+  free(state->Display);
 }
 
 static void FastMap_SetEntries(ARMword addr,ARMword *data,FastMapAccessFunc func,FastMapUInt flags,ARMword size)

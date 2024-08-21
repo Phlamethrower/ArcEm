@@ -126,12 +126,6 @@ struct MEMCStruct {
 
 extern struct MEMCStruct memc;
 
-
-typedef struct {
-  DisplayInfo Display;
-} PrivateDataType;
-
-#define PRIVD ((PrivateDataType *)state->MemDataPtr)
 #define MEMC (memc)
 
 /* ------------------- inlined FastMap functions ------------------------------ */

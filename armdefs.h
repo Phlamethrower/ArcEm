@@ -26,12 +26,6 @@
 #define TRUE 1
 #define LOW 0
 #define HIGH 1
-#define LOWHIGH 1
-#define HIGHLOW 2
-
-#ifndef __STDC__
-typedef char * VoidStar;
-#endif
 
 typedef unsigned int ARMword; /* must be 32 bits wide */
 
@@ -58,21 +52,19 @@ typedef enum ARMStartIns {
   RESUME        = 8
 } ARMStartIns;
 
+typedef struct DisplayInfo DisplayInfo;
 
 struct ARMul_State {
    /* Most common stuff, current register file first to ease indexing */
    ARMword Reg[16];           /* the current register file */
    unsigned long NumCycles;   /* Number of cycles */
    enum ARMStartIns NextInstr;/* Pipeline state */
-#ifdef MEMC_IN_STATE
-   struct MEMCStruct *MEMCPtr;/* MEMC */
-#endif
    unsigned abortSig;         /* Abort state */
    ARMword Aborted;           /* sticky flag for aborts */
    ARMword AbortAddr;         /* to keep track of Prefetch aborts */
    unsigned Exception;        /* IRQ & FIQ pins */
    unsigned long Now;         /* time next event should be triggered */
-   void *MemDataPtr;          /* VIDC/DisplayInfo struct */
+   DisplayInfo *Display;      /* VIDC/DisplayInfo struct */
    ARMword Bank;              /* the current register bank */
    unsigned NtransSig;        /* MEMC USR/SVC flag, somewhat redundant with FastMapMode */
    ARMword Base;              /* extra hand for base writeback */

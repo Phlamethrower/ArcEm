@@ -105,7 +105,7 @@ ARMul_State *ARMul_NewState(void)
 
  state->Aborted = FALSE;
 
- state->MemDataPtr = NULL;
+ state->Display = NULL;
 
  state->Now = 0;
 
