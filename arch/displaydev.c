@@ -18,8 +18,6 @@ const DisplayDev *DisplayDev_Current = NULL;
 int DisplayDev_Set(ARMul_State *state,const DisplayDev *dev)
 {
   struct Vidc_Regs Vidc;
-  if(dev == DisplayDev_Current)
-    return 0;
   if(DisplayDev_Current)
   {
     Vidc = VIDC;

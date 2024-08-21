@@ -970,6 +970,11 @@ static void PDD_Name(Shutdown)(ARMul_State *state)
   int idx = EventQ_Find(state,PDD_Name(EventFunc));
   if(idx >= 0)
     EventQ_Remove(state,idx);
+  else
+  {
+    fprintf(stderr,"Couldn't find PDD_Name(EventFunc)!\n");
+    exit(EXIT_FAILURE);
+  }
   free(state->Display);
   state->Display = NULL;
 }

@@ -25,12 +25,31 @@
 
 #include "ControlPane.h"
 
-#define USE_PAL_DISPLAY
+#define ENABLE_MENU
 
-static void UpdateCursorPos(ARMul_State *state);
+
+#ifdef ENABLE_MENU
+static int enable_screenshots = 0;
+static int enable_stats = 0;
+static int do_screenshot = 0;
+
+static void GoMenu(void);
+#endif
+
 static void InitModeTable(void);
 
+typedef struct {
+  int Width;
+  int Height;
+  int XOffset;
+  int YOffset;
+  int XScale;
+  int YScale;
+} DisplayParams;
+
 static void set_cursor_palette(unsigned int *pal);
+static void UpdateCursorPos(ARMul_State *state,const DisplayParams *params);
+static void Host_PollDisplay_Common(ARMul_State *state,const DisplayParams *params);
 
 typedef struct {
   int w;
@@ -79,7 +98,7 @@ static int ChangeMode(const HostMode *mode,int depth)
   if((mode != current_mode) || (depth != current_depth))
   {
     /* Change mode */
-    int block[8];
+    int block[10];
     block[0] = 1;
     block[1] = mode->w;
     block[2] = mode->h;
@@ -87,9 +106,11 @@ static int ChangeMode(const HostMode *mode,int depth)
     block[4] = -1;
     if(depth == 3)
     {
-      block[5] = 3;
-      block[6] = 255;
-      block[7] = -1;
+      block[5] = 0;
+      block[6] = 128;
+      block[7] = 3;
+      block[8] = 255;
+      block[9] = -1;
     }
     else
     {
@@ -116,7 +137,6 @@ static int ChangeMode(const HostMode *mode,int depth)
 
 /* ------------------------------------------------------------------ */
 
-#ifndef USE_PAL_DISPLAY
 /* Standard display device */
 
 typedef unsigned short SDD_HostColour;
@@ -160,7 +180,8 @@ static inline void SDD_Name(Host_WritePixel)(ARMul_State *state,SDD_Row *row,SDD
 
 static inline void SDD_Name(Host_WritePixels)(ARMul_State *state,SDD_Row *row,SDD_HostColour pix,unsigned int count) { while(count--) *(*row)++ = pix; }
 
-void SDD_Name(Host_PollDisplay)(ARMul_State *state);
+static void
+SDD_Name(Host_PollDisplay)(ARMul_State *state);
 
 #include "../arch/stddisplaydev.c"
 
@@ -185,7 +206,22 @@ static void SDD_Name(Host_ChangeMode)(ARMul_State *state,int width,int height,in
   /* Screen is expected to be cleared */
   _swi(OS_WriteC,_IN(0),12);
 }
-#else
+
+static void
+SDD_Name(Host_PollDisplay)(ARMul_State *state)
+{
+  DisplayParams params;
+  params.Width = HD.Width;
+  params.Height = HD.Height;
+  params.XOffset = HD.XOffset;
+  params.YOffset = HD.YOffset;
+  params.XScale = HD.XScale;
+  params.YScale = HD.YScale;
+  Host_PollDisplay_Common(state,&params);
+}
+
+/* ------------------------------------------------------------------ */
+
 /* Palettised display code */
 #define PDD_Name(x) pdd_##x
 
@@ -212,7 +248,8 @@ static inline ARMword *PDD_Name(Host_GetRow)(ARMul_State *state,int row,int offs
   return (ARMword *) base;
 }
 
-static void PDD_Name(Host_PollDisplay)(ARMul_State *state);
+static void
+PDD_Name(Host_PollDisplay)(ARMul_State *state);
 
 #include "../arch/paldisplaydev.c"
 
@@ -234,23 +271,20 @@ void PDD_Name(Host_ChangeMode)(ARMul_State *state,int width,int height,int depth
   HD.Height = ModeVarsOut[MODE_VAR_HEIGHT]+1;
 
   /* Calculate expansion params */
-  if(HD.ExpandTable)
-  {
-    free(HD.ExpandTable);
-    HD.ExpandTable = NULL;
-  }
   if((realdepth == depth) && (HD.XScale == 1))
   {
     /* No expansion */
+    HD.ExpandTable = NULL;
   }
   else
   {
     /* Expansion! */
+    static ARMword expandtable[256];
     HD.ExpandFactor = 0;
     while((1<<HD.ExpandFactor) < HD.XScale)
       HD.ExpandFactor++;
     HD.ExpandFactor += (realdepth-depth);
-    HD.ExpandTable = (ARMword *) malloc(4*GetExpandTableSize(1<<depth,HD.ExpandFactor));
+    HD.ExpandTable = expandtable;
     unsigned int mul = 1;
     int i;
     for(i=0;i<HD.XScale;i++)
@@ -266,7 +300,23 @@ void PDD_Name(Host_ChangeMode)(ARMul_State *state,int width,int height,int depth
   _swi(OS_WriteC,_IN(0),12);
 }
 
-#endif
+static void
+PDD_Name(Host_PollDisplay)(ARMul_State *state)
+{
+  DisplayParams params;
+  params.Width = HD.Width;
+  params.Height = HD.Height;
+  params.XOffset = HD.XOffset;
+  params.YOffset = HD.YOffset;
+  params.XScale = HD.XScale;
+  params.YScale = HD.YScale;
+  Host_PollDisplay_Common(state,&params);
+}
+
+#undef DISPLAYINFO
+#undef HOSTDISPLAY
+#undef DC
+#undef HD
 
 /* ------------------------------------------------------------------ */
 
@@ -286,16 +336,45 @@ static void set_cursor_palette(unsigned int *pal)
     return;
 }
 
+/*-----------------------------------------------------------------------------*/
+/* Move the cursor image                                                      */
+static void UpdateCursorPos(ARMul_State *state,const DisplayParams *params) {
+  int internal_x, internal_y;
+  char block[5];
+
+  /* Calculate correct cursor position, relative to the display start */
+  DisplayDev_GetCursorPos(state,&internal_x,&internal_y);
+  /* Convert to our screen space */
+  internal_x+=CursorXOffset;
+  internal_x=internal_x*params->XScale+params->XOffset;
+  internal_y=internal_y*params->YScale+params->YOffset;
+
+  block[0]=5;
+  {
+    short x = internal_x << ModeVarsOut[MODE_VAR_XEIG];
+    block[1] = x & 255;
+    block[2] = x >> 8;
+  }
+  {
+    short y = (params->Height-internal_y) << ModeVarsOut[MODE_VAR_YEIG];
+    block[3] = y & 255;
+    block[4] = y >> 8;
+  }
+
+  _swi(OS_Word, _INR(0,1), 21, &block);
+
+}; /* UpdateCursorPos */
+
 /* ------------------------------------------------------------------ */
 
 /* Refresh the mouse's image                                                    */
-static void RefreshMouse(ARMul_State *state) {
+static void RefreshMouse(ARMul_State *state,const DisplayParams *params) {
   int height;
   ARMword *pointer_data = MEMC.PhysRam + ((MEMC.Cinit * 16)/4);
 
   height = VIDC.Vert_CursorEnd - VIDC.Vert_CursorStart;
 
-  if(height && (height <= 16) && (HOSTDISPLAY.YScale >= 2))
+  if(height && (height <= 16) && (params->YScale >= 2))
   {
     /* line-double the cursor image */
     static ARMword double_data[2*32];
@@ -309,7 +388,7 @@ static void RefreshMouse(ARMul_State *state) {
     pointer_data = double_data;
   }
   CursorXOffset = 0;
-  if(height && (height <= 32) && (HOSTDISPLAY.XScale >= 2))
+  if(height && (height <= 32) && (params->XScale >= 2))
   {
     /* Double the width of the image; might not work too well */
     static ARMword double_data[2*32];
@@ -360,35 +439,81 @@ static void RefreshMouse(ARMul_State *state) {
 
   _swi(OS_Byte, _INR(0,1), 106, 2+(1<<7));
 
-  UpdateCursorPos(state);
+  UpdateCursorPos(state,params);
   set_cursor_palette(VIDC.CursorPalette);
 }; /* RefreshMouse */
 
 
-#ifdef USE_PAL_DISPLAY
-void
-PDD_Name(Host_PollDisplay)(ARMul_State *state)
-#else
-void
-SDD_Name(Host_PollDisplay)(ARMul_State *state)
-#endif
+#ifdef ENABLE_MENU
+static void rbswap(void)
 {
-  RefreshMouse(state);
-
-#if 1
-  static clock_t oldtime;
-  static ARMword oldcycles;
-  clock_t nowtime2 = clock();
-  if((nowtime2-oldtime) > CLOCKS_PER_SEC)
+  ARMword *pix = (ARMword *) ModeVarsOut[MODE_VAR_ADDR];
+  ARMword bytes = ModeVarsOut[MODE_VAR_BPL]*(ModeVarsOut[MODE_VAR_HEIGHT]+1);
+  const ARMword mask = 0x1f001f;
+  while(bytes>=4)
   {
-    const float scale = ((float)CLOCKS_PER_SEC)/1000000.0f;
-    float mhz = scale*((float)(ARMul_Time-oldcycles))/((float)(nowtime2-oldtime));
-    printf("\x1e%.2fMHz\n",mhz);
-    oldcycles = ARMul_Time;
-    oldtime = nowtime2;
+    ARMword temp = *pix;
+    ARMword red = temp & mask;
+    ARMword green = temp & (mask<<5);
+    ARMword blue = temp & (mask<<10);
+    *pix++ = (red<<10) | green | (blue>>10);
+    bytes -= 4;
   }
+}
 #endif
-}; /* DisplayKbd_PollHostDisplay */
+
+static void Host_PollDisplay_Common(ARMul_State *state,const DisplayParams *params)
+{
+  RefreshMouse(state,params);
+
+#ifdef ENABLE_MENU
+  if(enable_stats)
+  {
+    static clock_t oldtime;
+    static ARMword oldcycles;
+    static int fps;
+    clock_t nowtime2 = clock();
+
+    /* Simple game FPS counter - count the number of frames where Vinit has changed */
+    static ARMword oldvinit;
+    if(MEMC.Vinit != oldvinit)
+    {
+      fps++;
+      oldvinit = MEMC.Vinit;
+    }
+
+    if((nowtime2-oldtime) > CLOCKS_PER_SEC)
+    {
+      const float scale = ((float)CLOCKS_PER_SEC)/1000000.0f;
+      float mhz = scale*((float)(ARMul_Time-oldcycles))/((float)(nowtime2-oldtime));
+      printf("\x1e%.2fMHz %dx%d %dbpp %d:%d %dfps   \n",mhz,(VIDC.Horiz_DisplayEnd-VIDC.Horiz_DisplayStart)*2,VIDC.Vert_DisplayEnd-VIDC.Vert_DisplayStart,1<<((VIDC.ControlReg>>2)&3),params->XScale,params->YScale,fps);
+      oldcycles = ARMul_Time;
+      oldtime = nowtime2;
+      fps = 0;
+    }
+  }
+  if(do_screenshot)
+  {
+    do_screenshot = 0;
+    char name[32];
+    static int count = 0;
+    sprintf(name,"<ArcEm$Dir>.^.screen%04d",count++);
+    if(hArcemConfig.bRedBlueSwap && (ModeVarsOut[MODE_VAR_LOG2BPP] == 4))
+    {
+      /* Unswap red/blue so the sprite is correct */
+      rbswap();
+    }
+    _swi(OS_SpriteOp,_IN(0)|_INR(2,3),2,name,1);
+    if(hArcemConfig.bRedBlueSwap && (ModeVarsOut[MODE_VAR_LOG2BPP] == 4))
+    {
+      /* Reswap red/blue :( */
+      rbswap();
+    }
+    /* Reset EmuRate since the above may have taken a looong time */
+    EmuRate_Reset(&statestr);
+  }
+#endif 
+}
 
 /*-----------------------------------------------------------------------------*/
 
@@ -417,6 +542,9 @@ static void restorebreak(void)
 }
 
 /*-----------------------------------------------------------------------------*/
+
+static const DisplayDev *displays[2] = {&PDD_DisplayDev,&SDD_DisplayDev};
+
 int
 DisplayDev_Init(ARMul_State *state)
 {
@@ -430,11 +558,7 @@ DisplayDev_Init(ARMul_State *state)
   _swi(OS_Byte,_INR(0,2)|_OUT(1),247,0xaa,0,&old_break);
   atexit(restorebreak);
 
-#ifdef USE_PAL_DISPLAY
-  return DisplayDev_Set(state,&PDD_DisplayDev);
-#else
-  return DisplayDev_Set(state,&SDD_DisplayDev);
-#endif
+  return DisplayDev_Set(state,displays[hArcemConfig.eDisplayDriver]);
 } /* DisplayKbd_InitHost */
 
 
@@ -454,34 +578,6 @@ static void ProcessKey(ARMul_State *state, int key, int transition) {
 #endif
 }; /* ProcessKey */
 
-/*-----------------------------------------------------------------------------*/
-/* Move the Control pane window                                                */
-static void UpdateCursorPos(ARMul_State *state) {
-  int internal_x, internal_y;
-  char block[5];
-
-  /* Calculate correct cursor position, relative to the display start */
-  DisplayDev_GetCursorPos(state,&internal_x,&internal_y);
-  /* Convert to our screen space */
-  internal_x+=CursorXOffset;
-  internal_x=internal_x*HOSTDISPLAY.XScale+HOSTDISPLAY.XOffset;
-  internal_y=internal_y*HOSTDISPLAY.YScale+HOSTDISPLAY.YOffset;
-
-  block[0]=5;
-  {
-    short x = internal_x << ModeVarsOut[MODE_VAR_XEIG];
-    block[1] = x & 255;
-    block[2] = x >> 8;
-  }
-  {
-    short y = (HD.Height-internal_y) << ModeVarsOut[MODE_VAR_YEIG];
-    block[3] = y & 255;
-    block[4] = y >> 8;
-  }
-
-  _swi(OS_Word, _INR(0,1), 21, &block);
-
-}; /* UpdateCursorPos */
 
 /*-----------------------------------------------------------------------------*/
 /* Called on an X motion event */
@@ -489,12 +585,14 @@ static void MouseMoved(ARMul_State *state, int mousex, int mousey/*,XMotionEvent
   int xdiff,ydiff;
 
   /* We are now only using differences from the reference position */
-  if ((mousex==HD.Width/2) && (mousey==HD.Height/2)) return;
+  int xmid = (ModeVarsOut[MODE_VAR_WIDTH]+1)>>1;
+  int ymid = (ModeVarsOut[MODE_VAR_HEIGHT]+1)>>1;
+  if ((mousex==xmid) && (mousey==ymid)) return;
 
   {
     char block[5];
-    int x=HD.Width/2;
-    int y=HD.Height/2;
+    int x=xmid;
+    int y=ymid;
 
     block[0]=3;
     block[1]=x & 255;
@@ -509,7 +607,7 @@ static void MouseMoved(ARMul_State *state, int mousex, int mousey/*,XMotionEvent
   fprintf(stderr,"MouseMoved: CursorStart=%d xmotion->x=%d\n",
           VIDC.Horiz_CursorStart,mousex);
 #endif
-  xdiff=mousex-HD.Width/2;
+  xdiff=mousex-xmid;
   if (KBD.MouseXCount!=0) {
     if (KBD.MouseXCount & 64) {
       signed char tmpC;
@@ -525,7 +623,7 @@ static void MouseMoved(ARMul_State *state, int mousex, int mousey/*,XMotionEvent
   if (xdiff>63) xdiff=63;
   if (xdiff<-63) xdiff=-63;
 
-  ydiff=mousey-HD.Height/2;
+  ydiff=mousey-ymid;
   if (KBD.MouseYCount & 64) {
     signed char tmpC;
     tmpC=KBD.MouseYCount | 128; /* Sign extend */
@@ -557,6 +655,26 @@ Kbd_PollHostKbd(ARMul_State *state)
     {
       //printf("Processing key %d, transition %d\n",key, transition);
       ProcessKey(state, key, transition);
+#ifdef ENABLE_MENU
+      static int left_down = 0;
+      static int right_down = 0;
+      static int both_down = 0;
+      if(key == 104) /* Left windows key */
+        left_down = transition;
+      else if(key == 105) /* Right windows key */
+        right_down = transition;
+      if(left_down & right_down)
+        both_down = 1;
+      if(both_down && !left_down && !right_down)
+      {
+        both_down = 0;
+        GoMenu();
+      }
+      else if(enable_screenshots && (key == 13) && transition)
+      {
+        do_screenshot = 1;
+      }
+#endif
     }
   }
 
@@ -645,19 +763,22 @@ static float ComputeFit(HostMode *mode,int x,int y,int aspect,int *outxscale,int
   int xscale=1;
   int yscale=1;
 
-  /* Use aspect ratios to work out right scale factors */
-  if(aspect > mode->aspect)
+  if(hArcemConfig.bAspectRatioCorrection)
   {
-    /* Emulator pixels are taller, apply Y scaling */
-    yscale = aspect/mode->aspect;
-  }
-  else if(aspect < mode->aspect)
-  {
-    /* Emulator pixels are wider, apply X scaling */
-    xscale = mode->aspect/aspect;
-    if(xscale > 2)
+    /* Use aspect ratios to work out right scale factors */
+    if(aspect > mode->aspect)
     {
-      return -1.0f; /* Too much X scaling */
+      /* Emulator pixels are taller, apply Y scaling */
+      yscale = aspect/mode->aspect;
+    }
+    else if(aspect < mode->aspect)
+    {
+      /* Emulator pixels are wider, apply X scaling */
+      xscale = mode->aspect/aspect;
+      if(xscale > 2)
+      {
+        return -1.0f; /* Too much X scaling */
+      }
     }
   }
 
@@ -665,7 +786,7 @@ static float ComputeFit(HostMode *mode,int x,int y,int aspect,int *outxscale,int
     return -1.0f; /* Mode not big enough */
 
   /* Apply global 2* scaling if possible */
-  if((x*xscale*2 <= mode->w) && (y*yscale*2 <= mode->h) && (xscale < 2))
+  if((x*xscale*2 <= mode->w) && (y*yscale*2 <= mode->h) && (xscale < 2) && (hArcemConfig.bUpscale))
   {
     xscale*=2;
     yscale*=2;
@@ -713,3 +834,84 @@ static HostMode *SelectROScreenMode(int x, int y, int aspect, int depths, int *o
   *outyscale = bestyscale;
   return bestmode;
 }
+
+#ifdef ENABLE_MENU
+typedef struct {
+  const char *name;
+  const char **values;
+  int *val;
+} menu_item;
+
+static const char *values_bool[] = {"Off","On",NULL};
+static const char *values_display[] = {"Palettised","16bpp",NULL};
+
+static const menu_item items[] =
+{
+  {"Display driver",values_display,&hArcemConfig.eDisplayDriver},
+  {"Red/blue swap 16bpp output",values_bool,&hArcemConfig.bRedBlueSwap},
+  {"Aspect ratio correction",values_bool,&hArcemConfig.bAspectRatioCorrection},
+  {"2X upscaling",values_bool,&hArcemConfig.bUpscale},
+  {"Take screenshots on Print Screen",values_bool,&enable_screenshots},
+  {"Show stats",values_bool,&enable_stats},
+  {"Resume",NULL,NULL},
+  {"Quit",NULL,NULL},
+};
+
+#define ITEM_MAX (sizeof(items)/sizeof(items[0]))
+#define ITEM_QUIT (ITEM_MAX-1)
+#define ITEM_RESUME (ITEM_MAX-2)
+
+static void DrawMenu(void)
+{
+  _swi(OS_WriteC,_IN(0),12);
+  printf("ArcEm tweak menu\n\n");
+  int i;
+  for(i=0;i<ITEM_MAX;i++)
+  {
+    if(items[i].values)
+      printf("%d. [%s] %s\n",i+1,items[i].values[*items[i].val],items[i].name);
+    else
+      printf("%d. %s\n",i+1,items[i].name);
+  }
+}
+
+static void GoMenu(void)
+{
+  /* Switch to a known-good screen mode. Just use the first in the list. */
+  ChangeMode(ModeList,3);
+  /* Make sure palette is correct (we may not have changed mode above!) */
+  _swi(OS_WriteI+20,0);
+  /* Flush input buffer */
+  _swi(OS_Byte,_INR(0,1),15,1);
+  do {
+    DrawMenu();
+    unsigned int c = _swi(OS_ReadC,_RETURN(0))-'1';
+    if(c==ITEM_QUIT)
+    {
+      exit(0);
+    }
+    else if(c==ITEM_RESUME)
+    {
+      break;
+    }
+    else if(c<ITEM_MAX)
+    {
+      int val = *(items[c].val);
+      val++;
+      if(!items[c].values[val])
+        val = 0;
+      *(items[c].val) = val;
+    }
+  } while(1);
+  /* (re)start display device. Even if we haven't changed anything, this is needed to force the screen to be redrawn (and the mode to be reset) */
+  if(DisplayDev_Set(&statestr,displays[hArcemConfig.eDisplayDriver]))
+  {
+    fprintf(stderr,"Failed to reinitialise display\n");
+    exit(EXIT_FAILURE);
+  }
+  /* Gobble any keyboard input */
+  while(_swi (ArcEmKey_GetKey, _RETURN(0))) {};
+  /* Reset EmuRate */
+  EmuRate_Reset(&statestr);
+}
+#endif

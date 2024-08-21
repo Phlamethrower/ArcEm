@@ -1616,6 +1616,11 @@ static void SDD_Name(Shutdown)(ARMul_State *state)
     idx = EventQ_Find(state,SDD_Name(RowStart));
   if(idx >= 0)
     EventQ_Remove(state,idx);
+  else
+  {
+    fprintf(stderr,"Couldn't find SDD event func!\n");
+    exit(EXIT_FAILURE);
+  }
   free(state->Display);
   state->Display = NULL;
 }
