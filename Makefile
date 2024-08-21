@@ -135,6 +135,8 @@ EXTNROM_SUPPORT=yes
 CFLAGS += -I@ -DSYSTEM_riscos_single -Iriscos-single -mtune=xscale -march=armv5te -mthrowback
 LDFLAGS += -static
 # Disable stack limit checks. -ffixed-sl required to prevent sl being used as temp storage, breaking unixlib and any other code that does do stack checks
+# Note - Currently won't work - we need to set up a big stack frame on entry to
+# avoid things like HostFS causing stack overflows
 #CFLAGS += -mno-apcs-stack-check -ffixed-sl
 # No function name poking for a bit extra speed
 CFLAGS += -mno-poke-function-name

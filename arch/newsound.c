@@ -1,4 +1,22 @@
-/* Common sound code */
+/*
+  arch/newsound.c
+
+  (c) 2011 Jeffrey Lee <me@phlamethrower.co.uk>
+  Based on original sound code by Daniel Clarke
+
+  Part of Arcem released under the GNU GPL, see file COPYING
+  for details.
+
+  This is the core of the sound system and is used to drive the platform-specifc
+  frontend code. At invtervals approximating the correct DMA interval, data is
+  fetched from memory and converted from the Arc multi-channel 8-bit log format
+  to signed linear 16-bit stereo. The converted data is then fed to the platform
+  code for output to the sound hardware.
+
+  Even if SOUND_SUPPORT is disabled, this code will still request data from the
+  core at the correct intervals, so emulated code that relies on sound IRQs
+  should run correctly.
+*/
 
 #include <stdio.h>
 #include <stdlib.h>

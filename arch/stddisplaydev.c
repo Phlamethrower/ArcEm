@@ -1,46 +1,103 @@
-/* ArcEm standard display driver
+/*
+   arch/stddisplaydev.c
 
-   (c) 2011 Jeffrey Lee
+   (c) 2011 Jeffrey Lee <me@phlamethrower.co.uk>
+   Based in part on original video code by David Alan Gilbert et al 
 
    Part of Arcem, covered under the GNU GPL, see file COPYING for details
+
+   This is the core implementation of the "standard display driver". It aims to
+   provide scanline-accurate timing of display updates, using the interface
+   described below to update the host display buffer. It's designed to be used
+   with hosts that support true/full colour displays (i.e. non-palettised),
+   although it can also be used with palettised ones if a fixed palette is used.
+
+   Cursor display is expected to be fully handled by the host, e.g. via
+   hardware overlay or manually rendering a (masked) image ontop of the main
+   display.
 */
 
 /*
-   This file is intended to be #included directly by another source file in order to generate a working display driver.
+   This file is intended to be #included directly by another source file in
+   order to generate a working display driver.
 
-   Before including the file, be sure to define the following:
+   Before including the file, be sure to define the following
+   types/symbols/macros:
 
    SDD_HostColour
-    - Data type used to store a colour value. E.g. typedef unsigned short SDD_HostColour.
+    - Data type used to store a colour value. E.g.
+      "typedef unsigned short SDD_HostColour".
+
    SDD_Name(x)
-    - Macro used to convert symbol name 'x' into an instance-specific version of the symbol. e.g. #define SDD_Name(x) MySDD_##x
+    - Macro used to convert symbol name 'x' into an instance-specific version
+      of the symbol. e.g.
+      "#define SDD_Name(x) MySDD_##x"
+
    void SDD_Name(Host_PollDisplay)(ARMul_State *state)
     - A function that the driver will call at the start of each frame.
+
    SDD_HostColour SDD_Name(Host_GetColour)(ARMul_State *state,unsigned int col)
-    - A function that the driver will call in order to convert a 13-bit VIDC physical colour into a host colour
-   void SDD_Name(Host_ChangeMode)(ARMul_State *state,int width,int height,int hz)
-    - A function that the driver will call whenever the display timings have changed enough to warrant a mode change.
-    - The implementation must change to the most appropriate display mode available and fill in the Width, Height, XScale and YScale members of the HostDisplay struct to reflect the new display parameters
+    - A function that the driver will call in order to convert a 13-bit VIDC
+      physical colour into a host colour.
+
+   void SDD_Name(Host_ChangeMode)(ARMul_State *state,int width,int height,
+                                  int hz)
+    - A function that the driver will call whenever the display timings have
+      changed enough to warrant a mode change.
+    - The implementation must change to the most appropriate display mode
+      available and fill in the Width, Height, XScale and YScale members of the
+      HostDisplay struct to reflect the new display parameters.
+    - Currently, failure to find a suitable mode isn't supported - however it
+      shouldn't be too hard to keep the screen blanked (not ideal) by keeping
+      DC.ModeChanged set to 1
+
    SDD_RowsAtOnce
-    - The number of source rows to process per update
+    - The number of source rows to process per update. This can be a non-const
+      variable if you want, so it can be tweaked on the fly to tune performance
+
    SDD_Row
-    - A data type that acts as an iterator/accessor for a screen row. It can be as simple as a SDD_HostColour pointer if need be.
+    - A data type that acts as an iterator/accessor for a screen row. It can be
+      anything from a simple *SDD_HostColour (for hosts with direct framebuffer
+      access, e.g. RISC OS), or something more complex like a struct which keeps
+      track of the current drawing coordinates (e.g. the truecolour X11 driver)
+    - SDD_Row instances must be able to cope with being passed by value as
+      function parameters.
+
    SDD_Row SDD_Name(Host_BeginRow)(ARMul_State *state,int row,int offset)
-    - Function to return a SDD_Row instance suitable for accessing the indicated row, starting from the given X offset
+    - Function to return a SDD_Row instance suitable for accessing the indicated
+      row, starting from the given X offset
+
    void SDD_Name(Host_EndRow)(ARMul_State *state,SDD_Row *row)
     - Function to end the use of a SDD_Row
-   void SDD_Name(Host_BeginUpdate)(ARMul_State *state,SDD_Row *row,unsigned int count)
-    - Function called when the driver is about to write to 'count' pixels of the row. Implementations could use it for tracking dirty regions in the display window.
+    - Where a SDD_Row has been copied via pass-by-value, currently only the
+      original instance will have Host_EndRow called on it.
+
+   void SDD_Name(Host_BeginUpdate)(ARMul_State *state,SDD_Row *row,
+                                   unsigned int count)
+    - Function called when the driver is about to write to 'count' pixels of the
+      row. Implementations could use it for tracking dirty regions in the
+      display window.
+
    void SDD_Name(Host_EndUpdate)(ARMul_State *state,SDD_Row *row)
     - Function called once the driver has finished the write operation
-   void SDD_Name(Host_SkipPixels)(ARMul_State *state,SDD_Row *row,unsigned int count)
+
+   void SDD_Name(Host_SkipPixels)(ARMul_State *state,SDD_Row *row,
+                                  unsigned int count)
     - Function to skip forwards 'count' pixels in the row
-   void SDD_Name(Host_WritePixel)(ARMul_State *state,SDD_Row *row,SDD_HostColour col)
-    - Function to write a single pixel and advance to the next location. Only called between BeginUpdate & EndUpdate.
-   void SDD_Name(Host_WritePixels)(ARMul_State *state,SDD_Row *row,SDD_HostColour col,unsigned int count)
-    - Function to fill N adjacent pixels with the same colour. 'count' may be zero. Only called between BeginUpdate & EndUpdate.
+
+   void SDD_Name(Host_WritePixel)(ARMul_State *state,SDD_Row *row,
+                                  SDD_HostColour col)
+    - Function to write a single pixel and advance to the next location. Only
+      called between BeginUpdate & EndUpdate.
+
+   void SDD_Name(Host_WritePixels)(ARMul_State *state,SDD_Row *row,
+                                   SDD_HostColour col,unsigned int count)
+    - Function to fill N adjacent pixels with the same colour. 'count' may be
+      zero. Only called between BeginUpdate & EndUpdate.
+
    SDD_DisplayDev
     - The name to use for the const DisplayDev struct that will be generated
+    
    SDD_Stats
     - Define this to enable the stats code.
 
@@ -121,6 +178,9 @@ static void vidstats_Dump(const char *c)
 
   A pointer to this is placed in state->Display
 
+  TODO - 'Control' and 'HostDisplay' should probably be merged together (or
+  just disposed of entirely, so everything is directly under DisplayInfo)
+
 */
 
 struct SDD_Name(DisplayInfo) {
@@ -158,7 +218,7 @@ struct SDD_Name(DisplayInfo) {
     SDD_HostColour Palette[256]; /* Host palette */
     SDD_HostColour BorderCols[1024]; /* Last border colour used for each scanline */
     unsigned int RefreshFlags[1024/32]; /* Bit flags of which display scanlines need full refresh due to Vstart/Vend/palette changes */
-    unsigned int UpdateFlags[1024][(512*1024)/UPDATEBLOCKSIZE]; /* Flags for each scanline (ouch!) */
+    unsigned int UpdateFlags[1024][(512*1024)/UPDATEBLOCKSIZE]; /* Flags for each scanline (8MB of flags - ouch!) */
   } HostDisplay;
 };
 

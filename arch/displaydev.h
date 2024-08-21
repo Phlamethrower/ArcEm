@@ -1,3 +1,14 @@
+/*
+  arch/displaydev.c
+
+  (c) 2011 Jeffrey Lee <me@phlamethrower.co.uk>
+
+  Part of Arcem released under the GNU GPL, see file COPYING
+  for details.
+
+  Utility functions for bridging the gap between the host display code and the
+  emulator core
+*/
 #ifndef DISPLAYDEV_H
 #define DISPLAYDEV_H
 

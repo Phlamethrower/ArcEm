@@ -177,7 +177,20 @@ typedef struct {
   EventQ_Func Func;    /* Function to call */
 } EventQ_Entry;
 
-#define EVENTQ_SIZE 16
+#define EVENTQ_SIZE 10
+
+/* NOTE - For speed reasons there aren't any overflow checks in the eventq
+          code, so be aware of how many systems are using the queue. At the
+          moment, these are:
+
+          arch/newsound.c - One entry for sound DMA fetches
+          arch/stddisplaydev.c - One entry for screen updates
+          arch/keyboard.c - One entry for keyboard/mouse polling
+          arch/archio.c - One entry for IOC timers
+          arch/archio.c - One entry for FDC & HDC updates
+          arch/armemu.c - One entry for updating ARMul_EmuRate
+        = 6 total
+*/
 
 /***************************************************************************\
 *                          Main emulator state                              *

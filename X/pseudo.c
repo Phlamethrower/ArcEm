@@ -1,3 +1,12 @@
+/*
+  X/pseudo.c
+
+  (c) 2011 Jeffrey Lee <me@phlamethrower.co.uk>
+
+  Standard display device implementation for pseudocolour X11 displays
+
+*/
+
 #include <limits.h>
 
 #include <X11/X.h>
@@ -17,8 +26,6 @@
 #include "../armemu.h"
 #include "arch/displaydev.h"
 #include "platform.h"
-
-/* Standard display device implementation for pseudocolour X displays */
 
 typedef char SDD_HostColour;
 #define SDD_Name(x) pseudo_##x

@@ -1,4 +1,5 @@
-/* (c) David Alan Gilbert 1995-1999 - see Readme file for copying info */
+/* (c) David Alan Gilbert 1995-1999 - see Readme file for copying info
+   Hacked about with for new display driver interface by Jeffrey Lee, 2011 */
 /* Display and keyboard interface for the Arc emulator */
 
 /*#define DEBUG_VIDCREGS*/

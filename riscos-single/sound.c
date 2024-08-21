@@ -1,3 +1,13 @@
+/*
+  riscos-single/sound.c
+
+  (c) 2011 Jeffrey Lee <me@phlamethrower.co.uk>
+
+  Basic SharedSound sound driver for ArcEm, based in part on my SharedSound
+  tutorial from http://www.iconbar.com/forums/viewthread.php?threadid=10778
+
+*/
+
 #include <stdio.h>
 #include <stdlib.h>
 
