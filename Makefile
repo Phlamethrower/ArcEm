@@ -79,7 +79,7 @@ OBJS = armcopro.o armemu.o arminit.o \
 	armsupp.o main.o dagstandalone.o eventq.o \
 		$(SYSTEM)/DispKbd.o arch/i2c.o arch/archio.o \
     arch/fdc1772.o $(SYSTEM)/ControlPane.o arch/hdc63463.o arch/ReadConfig.o \
-    arch/keyboard.o $(SYSTEM)/filecalls.o \
+    arch/keyboard.o $(SYSTEM)/filecalls.o arch/filecommon.o \
     arch/ArcemConfig.o arch/cp15.o arch/newsound.o arch/displaydev.o
 
 SRCS = armcopro.c armemu.c arminit.c arch/armarc.c \
@@ -88,7 +88,7 @@ SRCS = armcopro.c armemu.c arminit.c arch/armarc.c \
 	arch/fdc1772.c $(SYSTEM)/ControlPane.c arch/hdc63463.c \
 	arch/ReadConfig.c arch/keyboard.c $(SYSTEM)/filecalls.c \
 	arch/ArcemConfig.c arch/cp15.c arch/newsound.c \
-	arch/displaydev.c
+	arch/displaydev.c arch/filecommon.c
 
 INCS = armdefs.h armemu.h $(SYSTEM)/KeyTable.h \
   arch/i2c.h arch/archio.h arch/fdc1772.h arch/ControlPane.h \

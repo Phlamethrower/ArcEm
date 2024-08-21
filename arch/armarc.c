@@ -29,6 +29,7 @@
 #include "ArcemConfig.h"
 #include "sound.h"
 #include "displaydev.h"
+#include "filecalls.h"
 
 
 #ifdef MACOSX
@@ -190,7 +191,6 @@ unsigned
 ARMul_MemoryInit(ARMul_State *state)
 {
   FILE *ROMFile;
-  unsigned int ROMWordNum, ROMWord;
   int PresPage;
   unsigned int i;
   unsigned extnrom_size = 0;
@@ -321,20 +321,7 @@ ARMul_MemoryInit(ARMul_State *state)
 
   dbug(" Loading ROM....\n ");
 
-  for (ROMWordNum = 0; ROMWordNum < MEMC.ROMHighSize / 4; ROMWordNum++) {
-#ifdef DEBUG
-    if (!(ROMWordNum & 0x1ff)) {
-      fprintf(stderr, ".");
-      fflush(stderr);
-    }
-#endif
-
-    ROMWord  =  fgetc(ROMFile);
-    ROMWord |= (fgetc(ROMFile) << 8);
-    ROMWord |= (fgetc(ROMFile) << 16);
-    ROMWord |= (fgetc(ROMFile) << 24);
-    MEMC.ROMHigh[ROMWordNum] = ROMWord;
-  }
+  File_ReadEmu(ROMFile,(char *) MEMC.ROMHigh,MEMC.ROMHighSize);
 
   /* Close System ROM Image File */
   fclose(ROMFile);

@@ -62,6 +62,7 @@ void DisplayDev_VSync(ARMul_State *state)
   EmuRate_Update(state);
 }
 
+
 /*
 
   Endian swapping
@@ -77,20 +78,6 @@ void DisplayDev_VSync(ARMul_State *state)
 */
 
 #ifdef HOST_BIGENDIAN
-static inline ARMword EndianSwap(const ARMword a)
-{
-  return (a>>24) | (a<<24) | ((a>>8) & 0xff00) | ((a<<8) & 0xff0000);
-}
-
-static void EndianWordCpy(ARMword *dest,const ARMword *src,size_t count)
-{
-  while(count)
-  {
-    *dest++ = EndianSwap(*src++);
-    count--;
-  }
-}
-
 /*
 
   Routine to copy bytes from one byte-aligned location to another
@@ -110,8 +97,8 @@ void ByteCopy(char *dest,const char *src,int size)
   if(srcalign)
   {
     src -= srcalign;
-    srcalign ^= 3; /* Byte swap the source address offset. Also gives count of how many to load. */
-    while(srcalign && size)
+    srcalign ^= 3; /* Byte swap the source address offset */
+    while((srcalign+1) && size)
     {
       *dest++ = src[srcalign];
       srcalign--;
@@ -122,7 +109,7 @@ void ByteCopy(char *dest,const char *src,int size)
   /* Examine alignment */
   int destalign = ((int) dest) & 3;
   /* Word aligned? */
-  if(!destalign && (size > 4))
+  if(!destalign && (size >= 4))
   {
     EndianWordCpy((ARMword *) dest,(const ARMword *) src,size>>2);
     dest += (size & ~3);
@@ -132,7 +119,7 @@ void ByteCopy(char *dest,const char *src,int size)
   else
   {
     /* Source is word aligned, but destination isn't. Copy data one byte at a time. */
-    while(size > 4)
+    while(size >= 4)
     {
       dest[0] = src[3];
       dest[1] = src[2];
@@ -144,14 +131,69 @@ void ByteCopy(char *dest,const char *src,int size)
     }
   }
   /* Any remaining bytes? */
-  while(size--)
+  while(size)
   {
     dest[size] = src[size ^ 3];
+    size--;
   }
 }
-#else
-#define EndianSwap(X) (X)
-#define EndianWordCpy(A,B,C) memcpy(A,B,(C)<<2)
+
+/*
+
+  Routine to copy bytes from one byte-aligned location to another
+
+  This time we need to do endian swapping on the destination address
+
+*/
+void InvByteCopy(char *dest,const char *src,int size)
+{
+  if(!size)
+    return;
+  /* Align destination */
+  int destalign = ((int) dest) & 3;
+  if(destalign)
+  {
+    dest -= destalign;
+    destalign ^= 3; /* Byte swap the dest address offset */
+    while((destalign+1) && size)
+    {
+      dest[destalign] = *src++;
+      destalign--;
+      size--;
+    }
+    dest += 4;
+  }    
+  /* Examine alignment */
+  int srcalign = ((int) src) & 3;
+  /* Word aligned? */
+  if(!srcalign && (size >= 4))
+  {
+    EndianWordCpy((ARMword *) dest,(const ARMword *) src,size>>2);
+    dest += (size & ~3);
+    src += (size & ~3);
+    size &= 3;
+  }
+  else
+  {
+    /* Destination is word aligned, but source isn't. Copy data one byte at a time. */
+    while(size >= 4)
+    {
+      dest[0] = src[3];
+      dest[1] = src[2];
+      dest[2] = src[1];
+      dest[3] = src[0];
+      dest += 4;
+      src += 4;
+      size -= 4;
+    }
+  }
+  /* Any remaining bytes? */
+  while(size)
+  {
+    dest[size ^ 3] = src[size];
+    size--;
+  }
+}
 #endif
 
 /*

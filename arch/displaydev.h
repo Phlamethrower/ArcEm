@@ -62,13 +62,36 @@ extern unsigned long DisplayDev_GetVIDCClockIn(void); /* Get VIDC source clock r
 
 extern void DisplayDev_VSync(ARMul_State *state); /* Trigger VSync interrupt & update ARMul_EmuRate. Note: Manipulates event queue! */
 
-/* Helper functions for display devices */
+/* General endian swapping/endian-aware memcpy functions */
 
 #ifdef HOST_BIGENDIAN
+static inline ARMword EndianSwap(const ARMword a)
+{
+  return (a>>24) | (a<<24) | ((a>>8) & 0xff00) | ((a<<8) & 0xff0000);
+}
+
+static inline void EndianWordCpy(ARMword *dest,const ARMword *src,size_t count)
+{
+  while(count)
+  {
+    *dest++ = EndianSwap(*src++);
+    count--;
+  }
+}
+
+/* src = little-endian emu memory, dest = big-endian host memory */
 extern void ByteCopy(char *dest,const char *src,int size);
+
+/* src = big-endian host memory, dest = little-endian emu memory */
+extern void InvByteCopy(char *dest,const char *src,int size);
 #else
+#define EndianSwap(X) (X)
+#define EndianWordCpy(A,B,C) memcpy(A,B,(C)<<2)
 #define ByteCopy(A,B,C) memcpy(A,B,C)
+#define InvByteCopy(A,B,C) memcpy(A,B,C)
 #endif
+
+/* Helper functions for display devices */
 
 extern void BitCopy(ARMword *dest,int destalign,const ARMword *src,int srcalign,int count);
 

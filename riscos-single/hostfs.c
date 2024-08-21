@@ -33,6 +33,7 @@
 #include "arch/armarc.h"
 #include "hostfs.h"
 #include "arch/ArcemConfig.h"
+#include "arch/filecalls.h"
 
 #ifdef __TARGET_UNIXLIB__ /* Set by GCC if we're using unixlib */
 #include <unixlib/local.h>
@@ -556,7 +557,6 @@ hostfs_getbytes(ARMul_State *state)
 {
   FILE *f = open_file[state->Reg[1]];
   ARMword ptr = state->Reg[2];
-  ARMword i;
 
   assert(state);
 
@@ -567,15 +567,9 @@ hostfs_getbytes(ARMul_State *state)
   dbug_hostfs("\tr4 = %u (file offset from which to get data)\n",
               state->Reg[4]);
 
-  hostfs_ensure_buffer_size(state->Reg[3]);
-
   fseek(f, (long) state->Reg[4], SEEK_SET);
 
-  fread(buffer, 1, state->Reg[3], f);
-
-  for (i = 0; i < state->Reg[3]; i++) {
-    ARMul_StoreByte(state, ptr++, buffer[i]);
-  }
+  File_ReadRAM(f, ptr, state->Reg[3]);
 }
 
 static void
@@ -583,7 +577,6 @@ hostfs_putbytes(ARMul_State *state)
 {
   FILE *f = open_file[state->Reg[1]];
   ARMword ptr = state->Reg[2];
-  ARMword i;
 
   assert(state);
 
@@ -594,15 +587,11 @@ hostfs_putbytes(ARMul_State *state)
   dbug_hostfs("\tr4 = %u (file offset at which to put data)\n",
               state->Reg[4]);
 
-  hostfs_ensure_buffer_size(state->Reg[3]);
+  if(ftell(f) != state->Reg[4])
 
   fseek(f, (long) state->Reg[4], SEEK_SET);
 
-  for (i = 0; i < state->Reg[3]; i++) {
-    buffer[i] = ARMul_LoadByte(state, ptr++);
-  }
-
-  fwrite(buffer, 1, state->Reg[3], f);
+  File_WriteRAM(f, ptr, state->Reg[3]);
 }
 
 static void
@@ -782,8 +771,6 @@ hostfs_write_file(ARMul_State *state, bool with_data)
     return;
   }
 
-  hostfs_ensure_buffer_size(BUFSIZE);
-
   f = fopen(new_pathname, "wb");
   if (!f) {
     /* TODO handle errors */
@@ -792,30 +779,25 @@ hostfs_write_file(ARMul_State *state, bool with_data)
     return;
   }
 
-  /* Fill the data buffer with 0's if we are not saving supplied data */
-  if (!with_data) {
+  size_t bytes_written;
+  if (with_data) {
+    bytes_written = File_WriteRAM(f,ptr,length);
+  } else {
+    /* Fill the data buffer with 0's if we are not saving supplied data */
+    hostfs_ensure_buffer_size(BUFSIZE);
     memset(buffer, 0, BUFSIZE);
-  }
-
-  /* Save file in blocks of up to BUFSIZE */
-  while (length > 0) {
-    size_t buffer_amount = MIN(length, BUFSIZE);
-    size_t bytes_written;
-
-    if (with_data) {
-      unsigned i;
-
-      /* Copy the correct amount of data into the buffer */
-      for (i = 0; i < buffer_amount; i++) {
-        buffer[i] = ARMul_LoadByte(state, ptr++);
-      }
+    while(length > 0) {
+      size_t buffer_amount = MIN(length,BUFSIZE);
+      /* TODO check for errors */
+      size_t temp = fwrite(buffer, 1, buffer_amount, f);
+      length -= temp;
+      bytes_written += temp;
+      if(temp != buffer_amount)
+        break;
     }
-
-    /* TODO check for errors */
-    bytes_written = fwrite(buffer, 1, buffer_amount, f);
-    length -= bytes_written;
   }
 
+  /* TODO - Check for errors */
 
   fclose(f); /* TODO check for errors */
 
@@ -1050,11 +1032,9 @@ hostfs_file_8_create_dir(ARMul_State *state)
 static void
 hostfs_file_255_load_file(ARMul_State *state)
 {
-  const unsigned BUFSIZE = MINIMUM_BUFFER_SIZE;
   char ro_path[PATH_MAX], host_pathname[PATH_MAX];
   risc_os_object_info object_info;
   FILE *f;
-  size_t bytes_read;
   ARMword ptr;
 
   assert(state);
@@ -1085,17 +1065,7 @@ hostfs_file_255_load_file(ARMul_State *state)
     return;
   }
 
-  hostfs_ensure_buffer_size(BUFSIZE);
-
-  do {
-    unsigned i;
-
-    bytes_read = fread(buffer, 1, BUFSIZE, f);
-
-    for (i = 0; i < bytes_read; i++) {
-      ARMul_StoreByte(state, ptr++, buffer[i]);
-    }
-  } while (bytes_read == BUFSIZE);
+  File_ReadRAM(f,ptr,state->Reg[4]);
 
   fclose(f);
 }
@@ -1524,8 +1494,6 @@ hostfs(ARMul_State *state, ARMword fs_op)
   __riscosify_control = __RISCOSIFY_NO_PROCESS;
 #endif
 
-  ARMword t = clock();
-
   switch (fs_op) {
   case 0: hostfs_open(state);     break;
   case 1: hostfs_getbytes(state); break;
@@ -1536,8 +1504,6 @@ hostfs(ARMul_State *state, ARMword fs_op)
   case 6: hostfs_func(state);     break;
   case 7: hostfs_gbpb(state);     break;
   }
-
-  fprintf(stderr,"took %d\n",clock()-t);
 
 #ifdef __TARGET_UNIXLIB__
   __riscosify_control = old_riscosify;
