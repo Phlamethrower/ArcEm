@@ -26,9 +26,6 @@ int sound_handler_id=0; /* ID of our sound handler (0 if uninstalled) */
 
 #define BUFFER_SAMPLES (16384) /* 8K stereo pairs */
 
-/* Define this to disable sound output, but still make the emulator act as if sound is enabled */
-//#define DUMMY_SOUND
-
 SoundData sound_buffer[BUFFER_SAMPLES];
 volatile int sound_buffer_in=BUFFER_SAMPLES; /* Number of samples we've placed in the buffer */
 volatile int sound_buffer_out=0; /* Number of samples read out by the IRQ routine */
@@ -40,7 +37,6 @@ extern void error_handler(void); /* Assembler function attached to ErrorV */
 
 void shutdown_sharedsound(void);
 
-#ifndef DUMMY_SOUND
 extern void __write_backtrace(int signo);
 void sigfunc(int sig)
 {
@@ -132,17 +128,14 @@ void shutdown_sharedsound(void)
 	regs.r[2] = 0;
 	_kernel_swi(OS_Release,&regs,&regs); 
 }
-#endif
 
 int Sound_InitHost(ARMul_State *state)
 {
-#ifndef DUMMY_SOUND
   if (init_sharedsound())
   {
     printf("Error: Couldn't register sound handler\n");
     return -1;
   }
-#endif
 
   /* We want the right channel first */
   eSound_StereoSense = Stereo_RightLeft;
@@ -156,7 +149,6 @@ int Sound_InitHost(ARMul_State *state)
 
 void Sound_HandleData(const SoundData *buffer,int numSamples,int samplePeriod)
 {
-#ifndef DUMMY_SOUND
   if(!sound_handler_id)
     return;
   numSamples *= 2;
@@ -211,5 +203,4 @@ void Sound_HandleData(const SoundData *buffer,int numSamples,int samplePeriod)
   }
   memcpy(sound_buffer+ofs,buffer,numSamples*sizeof(SoundData));
   sound_buffer_in += numSamples;
-#endif
 }

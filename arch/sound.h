@@ -19,7 +19,8 @@ extern int Sound_Init(ARMul_State *state);
 
 extern void Sound_UpdateDMARate(ARMul_State *state);
 
-/* These calls must be made by dispkbd implementations when the corresponding registers are updated */
+#ifdef SOUND_ENABLED
+/* These calls are made by DispKbdShared when the corresponding registers are updated */
 extern void Sound_SoundFreqUpdated(ARMul_State *state);
 extern void Sound_StereoUpdated(ARMul_State *state);
 
@@ -30,5 +31,6 @@ extern int Sound_InitHost(ARMul_State *state);
    numSamples is the number of stereo pairs
    samplePeriod is measured in microseconds */
 extern void Sound_HandleData(const SoundData *buffer,int numSamples,int samplePeriod);
+#endif
 
 #endif

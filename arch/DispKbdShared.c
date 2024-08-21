@@ -161,7 +161,7 @@ static inline void Display_PaletteUpdate8bpp(ARMul_State *state,HostPixel *Palet
       {
         int j;
         /* Deal with the funky 8bpp palette */
-        unsigned int Base = VIDC.Palette[i] & 0x1727; /* Only these bits of the palette entry are used in 8bpp modes */
+        unsigned int Base = VIDC.Palette[i] & 0x1737; /* Only these bits of the palette entry are used in 8bpp modes */
         static const unsigned int ExtraPal[16] = {
           0x000, 0x008, 0x040, 0x048, 0x080, 0x088, 0x0c0, 0x0c8,
           0x800, 0x808, 0x840, 0x848, 0x880, 0x888, 0x8c0, 0x8c8

@@ -39,16 +39,12 @@ HOST_BIGENDIAN=no
 
 # Windowing System
 ifeq ($(SYSTEM),)
-SYSTEM=riscos-single
+SYSTEM=X
 endif
 
 CC=gcc
 LD=gcc
 LDFLAGS=
-
-# Armulator core endianess of the *emulated* processor (LITTLEEND or BIGEND)
-# Should stay as LITTLEEND when used in ArcEm
-ENDIAN=LITTLEEND
 
 WARN = -Wall -Wno-return-type -Wno-unknown-pragmas -Wshadow \
    -Wpointer-arith -Wcast-align -Wstrict-prototypes \
@@ -68,7 +64,7 @@ endif
 endif
 
 CFLAGS += \
-    -D$(ENDIAN) $(CFL) $(WARN) \
+    $(CFL) $(WARN) \
     -I$(SYSTEM) -Iarch -I.
 
 prefix=/usr/local
@@ -84,7 +80,7 @@ OBJS = armcopro.o armemu.o arminit.o \
 		$(SYSTEM)/DispKbd.o arch/i2c.o arch/archio.o \
     arch/fdc1772.o $(SYSTEM)/ControlPane.o arch/hdc63463.o arch/ReadConfig.o \
     arch/keyboard.o $(SYSTEM)/filecalls.o arch/DispKbdShared.o \
-    arch/ArcemConfig.o arch/cp15.o
+    arch/ArcemConfig.o arch/cp15.o arch/newsound.o
 
 SRCS = armcopro.c armemu.c arminit.c arch/armarc.c \
 	armsupp.c main.c dagstandalone.c eventq.c \
@@ -118,18 +114,11 @@ endif
 ifeq (${SYSTEM},gp2x)
 CC=arm-linux-gcc
 LD=$(CC)
-DIRECT_DISPLAY=yes
 SYSROOT = D:/gp2x/devkitGP2X/sysroot
 CFLAGS += -DSYSTEM_gp2x -Igp2x -I$(SYSROOT)/usr/include
 LIBS += -L$(SYSROOT)/usr/lib -static
 LD=$(CC)
 TARGET=arcem.gpe
-endif
-
-ifeq (${SYSTEM},riscos)
-EXTNROM_SUPPORT=notyet
-CFLAGS += -DSYSTEM_riscos -Iriscos-single
-TARGET=!ArcEm/arcem
 endif
 
 ifeq (${SYSTEM},riscos-single)
@@ -141,7 +130,6 @@ SOUND_SUPPORT=yes
 SOUND_PTHREAD=no
 OBJS += riscos-single/soundbuf.o
 # General
-DIRECT_DISPLAY=yes
 EXTNROM_SUPPORT=yes
 CFLAGS += -I@ -DSYSTEM_riscos_single -Iriscos-single -mtune=xscale -march=armv5te -mthrowback
 LDFLAGS += -static
@@ -150,10 +138,10 @@ LDFLAGS += -static
 # No function name poking for a bit extra speed
 CFLAGS += -mno-poke-function-name
 # Debug options
-CFLAGS += -save-temps -mpoke-function-name
+#CFLAGS += -save-temps -mpoke-function-name
 # Profiling
 #CFLAGS += -mpoke-function-name -DPROFILE_ENABLED
-OBJS += prof.o
+#OBJS += prof.o
 TARGET=!ArcEm/arcem
 endif
 
@@ -176,7 +164,7 @@ endif
 
 ifeq (${SOUND_SUPPORT},yes)
 CFLAGS += -DSOUND_SUPPORT
-OBJS += $(SYSTEM)/sound.o arch/newsound.o
+OBJS += $(SYSTEM)/sound.o
 INCS += arch/sound.h
 ifeq (${SOUND_PTHREAD},yes)
 LIBS += -lpthread

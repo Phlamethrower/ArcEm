@@ -28,9 +28,7 @@
 #include "Version.h"
 #include "extnrom.h"
 #include "ArcemConfig.h"
-#ifdef SOUND_SUPPORT
 #include "sound.h"
-#endif
 
 
 #ifdef MACOSX
@@ -263,13 +261,11 @@ ARMul_MemoryInit(ARMul_State *state)
   IO_Init(state);
   DisplayKbd_Init(state);
 
-#ifdef SOUND_SUPPORT
   if (Sound_Init(state)) {
     /* There was an error of some sort - it will already have been reported */
     fprintf(stderr, "Could not initialise sound output - exiting\n");
     exit(EXIT_FAILURE);
   }
-#endif
 
   for (i = 0; i < 512 * 1024 / UPDATEBLOCKSIZE; i++) {
     MEMC.UpdateFlags[i] = 1;
