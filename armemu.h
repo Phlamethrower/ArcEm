@@ -189,7 +189,18 @@
 
 #define DEST (state->Reg[DESTReg])
 
+#ifndef __arm__ /* GCC makes a mess of this ternary op, much better to go with the hand-holding approach to ensure there's only one LDR */
 #define LHS ((LHSReg == 15) ? R15PC : (state->Reg[LHSReg]) )
+#else
+#define LHS GetLHS(state,LHSReg)
+static inline ARMword GetLHS(ARMul_State *state,ARMword r)
+{
+	ARMword lhs = state->Reg[r];
+	if(r == 15)
+		lhs &= R15PCBITS;
+	return lhs;
+}
+#endif
 
 #define MULDESTReg (BITS(16,19))
 #define MULLHSReg (BITS(0,3))
