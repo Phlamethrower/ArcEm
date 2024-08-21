@@ -199,6 +199,9 @@ typedef enum ARMStartIns {
 
 typedef struct DisplayInfo DisplayInfo;
 
+#define Exception_IRQ R15IBIT
+#define Exception_FIQ R15FBIT
+
 struct ARMul_State {
    /* Most common stuff, current register file first to ease indexing */
    ARMword Reg[16];           /* the current register file */
@@ -207,7 +210,7 @@ struct ARMul_State {
    unsigned abortSig;         /* Abort state */
    ARMword Aborted;           /* sticky flag for aborts */
    ARMword AbortAddr;         /* to keep track of Prefetch aborts */
-   unsigned Exception;        /* IRQ & FIQ pins */
+   ARMword Exception;         /* IRQ & FIQ pins */
    DisplayInfo *Display;      /* VIDC/DisplayInfo struct */
    ARMword Bank;              /* the current register bank */
    unsigned NtransSig;        /* MEMC USR/SVC flag, somewhat redundant with FastMapMode */

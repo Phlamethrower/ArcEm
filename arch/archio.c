@@ -8,6 +8,7 @@
 #include <signal.h>
 
 #include "../armdefs.h"
+#include "../armemu.h"
 
 #include "dbugsys.h"
 
@@ -59,11 +60,11 @@ IO_Init(ARMul_State *state)
 void
 IO_UpdateNfiq(ARMul_State *state)
 {
-  register unsigned int tmp = state->Exception & ~2;
+  register unsigned int tmp = state->Exception & ~Exception_FIQ;
 
   if (ioc.FIRQStatus & ioc.FIRQMask) {
     /* Cause FIQ */
-    tmp |= 2;
+    tmp |= Exception_FIQ;
   }
 
   state->Exception = tmp;
@@ -73,11 +74,11 @@ IO_UpdateNfiq(ARMul_State *state)
 void
 IO_UpdateNirq(ARMul_State *state)
 {
-  register unsigned int tmp = state->Exception & ~1;
+  register unsigned int tmp = state->Exception & ~Exception_IRQ;
 
   if (ioc.IRQStatus & ioc.IRQMask) {
     /* Cause interrupt! */
-    tmp |= 1;
+    tmp |= Exception_IRQ;
   }
 
   state->Exception = tmp;

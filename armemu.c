@@ -1103,19 +1103,18 @@ ARMul_Emulate26(ARMul_State *state)
         Prof_EndFunc(func);
       }
 
-      if (state->Exception) { /* Any exceptions */
-        if ((state->Exception & 2) && !FFLAG) {
+      ARMword excep = state->Exception &~state->Reg[15];
+      if (excep) { /* Any exceptions */
+        if (excep & Exception_FIQ) {
           Prof_BeginFunc(ARMul_Abort);
           ARMul_Abort(state, ARMul_FIQV);
           Prof_EndFunc(ARMul_Abort);
-          break;
-
-        } else if ((state->Exception & 1) && !IFLAG) {
+        } else {
           Prof_BeginFunc(ARMul_Abort);
           ARMul_Abort(state, ARMul_IRQV);
           Prof_EndFunc(ARMul_Abort);
-          break;
         }
+        break;
       }
 
       ARMword instr = pipe[pipeidx].instr;
@@ -1168,21 +1167,19 @@ ARMul_Emulate26(ARMul_State *state)
         Prof_EndFunc(func);
       }
 
-      if (state->Exception) { /* Any exceptions */
-        if ((state->Exception & 2) && !FFLAG) {
+      ARMword excep = state->Exception &~state->Reg[15];
+      if (excep) { /* Any exceptions */
+        pipeidx = 1;
+        if (excep & Exception_FIQ) {
           Prof_BeginFunc(ARMul_Abort);
           ARMul_Abort(state, ARMul_FIQV);
           Prof_EndFunc(ARMul_Abort);
-          pipeidx = 1;
-          break;
-
-        } else if ((state->Exception & 1) && !IFLAG) {
+        } else {
           Prof_BeginFunc(ARMul_Abort);
           ARMul_Abort(state, ARMul_IRQV);
           Prof_EndFunc(ARMul_Abort);
-          pipeidx = 1;
-          break;
         }
+        break;
       }
 
       ARMword instr = pipe[1].instr;
@@ -1234,21 +1231,19 @@ ARMul_Emulate26(ARMul_State *state)
         Prof_EndFunc(func);
       }
 
-      if (state->Exception) { /* Any exceptions */
-        if ((state->Exception & 2) && !FFLAG) {
+      excep = state->Exception &~state->Reg[15];
+      if (excep) { /* Any exceptions */
+        pipeidx = 2;
+        if (excep & Exception_FIQ) {
           Prof_BeginFunc(ARMul_Abort);
           ARMul_Abort(state, ARMul_FIQV);
-          pipeidx = 2;
           Prof_EndFunc(ARMul_Abort);
-          break;
-
-        } else if ((state->Exception & 1) && !IFLAG) {
+        } else {
           Prof_BeginFunc(ARMul_Abort);
           ARMul_Abort(state, ARMul_IRQV);
           Prof_EndFunc(ARMul_Abort);
-          pipeidx = 2;
-          break;
         }
+        break;
       }
 
       instr = pipe[2].instr;
@@ -1309,21 +1304,19 @@ ARMul_Emulate26(ARMul_State *state)
         Prof_EndFunc(func);
       }
 
-      if (state->Exception) { /* Any exceptions */
-        if ((state->Exception & 2) && !FFLAG) {
+      excep = state->Exception &~state->Reg[15];
+      if (excep) { /* Any exceptions */
+        pipeidx = 0;
+        if (excep & Exception_FIQ) {
           Prof_BeginFunc(ARMul_Abort);
           ARMul_Abort(state, ARMul_FIQV);
           Prof_EndFunc(ARMul_Abort);
-          pipeidx = 0;
-          break;
-
-        } else if ((state->Exception & 1) && !IFLAG) {
+        } else {
           Prof_BeginFunc(ARMul_Abort);
           ARMul_Abort(state, ARMul_IRQV);
           Prof_EndFunc(ARMul_Abort);
-          pipeidx = 0;
-          break;
         }
+        break;
       }
 
       instr = pipe[0].instr;

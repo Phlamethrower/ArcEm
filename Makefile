@@ -68,7 +68,7 @@ endif
 endif
 
 CFLAGS += \
-    -D$(ENDIAN) $(CFL) -DNOOS -DNOFPE $(WARN) \
+    -D$(ENDIAN) $(CFL) $(WARN) \
     -I$(SYSTEM) -Iarch -I.
 
 prefix=/usr/local
@@ -88,7 +88,6 @@ OBJS = armcopro.o armemu.o arminit.o \
 
 SRCS = armcopro.c armemu.c arminit.c arch/armarc.c \
 	armsupp.c main.c dagstandalone.c eventq.c \
-	arm-support.s conditions.s rhs.s \
 	$(SYSTEM)/DispKbd.c arch/i2c.c arch/archio.c \
 	arch/fdc1772.c $(SYSTEM)/ControlPane.c arch/hdc63463.c \
 	arch/ReadConfig.c arch/keyboard.c $(SYSTEM)/filecalls.c \
@@ -143,8 +142,9 @@ CFLAGS += -mno-apcs-stack-check -ffixed-sl
 # No function name poking for a bit extra speed
 CFLAGS += -mno-poke-function-name
 # Debug options
-CFLAGS += -save-temps -mpoke-function-name
-#OBJS += arm-support.o rhs.o
+#CFLAGS += -save-temps -mpoke-function-name
+# Profiling
+#CFLAGS += -mpoke-function-name -DPROFILE_ENABLED
 OBJS += prof.o
 TARGET=!ArcEm/arcem
 endif
@@ -245,28 +245,8 @@ armcopro.o: armcopro.c armdefs.h
 armemu.o: armemu.c armdefs.h armemu.h armemuinstr.c armemudec.c
 	$(CC) $(CFLAGS) -o armemu.o -c armemu.c
 
-arm-support.o: arm-support.s instructions
-	$(CC) -x assembler-with-cpp arm-support.s -c -I@
-
-rhs.o: rhs.s
-	$(CC) rhs.s -c
-
 prof.o: prof.s
 	$(CC) -x assembler-with-cpp prof.s -c
-
-instructions: armsuppmov.s armsuppmovs.s armsuppmvn.s armsuppmvns.s
-
-armsuppmov.s: conditions.s
-	sed s#ARMINS#Mov# <conditions.s >armsuppmov.s
-
-armsuppmovs.s: conditions.s
-	sed s#ARMINS#Movs# <conditions.s >armsuppmovs.s
-
-armsuppmvn.s: conditions.s
-	sed s#ARMINS#Mvn# <conditions.s >armsuppmvn.s
-
-armsuppmvns.s: conditions.s
-	sed s#ARMINS#Mvns# <conditions.s >armsuppmvns.s
 
 arminit.o: arminit.c armdefs.h armemu.h
 	$(CC) $(CFLAGS) -c $*.c

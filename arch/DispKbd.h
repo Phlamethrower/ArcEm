@@ -46,8 +46,6 @@ struct DisplayInfo {
 #else
     int MustResetPalette; /* Set to 1 by emulator if something major changes */
 #endif
-    int PollCount;
-    int AutoRefresh;
 
     /* Matches the ones in the memory model - if they are different redraw */
     unsigned int UpdateFlags[(512*1024)/256];
@@ -144,7 +142,6 @@ struct DisplayInfo {
 /* Functions each Host must provide */
 void DisplayKbd_InitHost(ARMul_State *state);
 int DisplayKbd_PollHost(ARMul_State *state);
-void RefreshDisplay(ARMul_State *state);
 void VIDC_PutVal(ARMul_State *state,ARMword address, ARMword data,int bNw);
 
 #ifdef SYSTEM_X
