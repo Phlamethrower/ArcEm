@@ -140,12 +140,11 @@ static int
 GetCurrentTimerVal(ARMul_State *state,int toget)
 {
   long timeSinceLastUpdate = ARMul_Time - ioc.TimersLastUpdated;
-  long scaledTimeSlip = (((unsigned long long) timeSinceLastUpdate) * ioc.IOCRate)>>16;
+  long scaledTimeSlip = (((unsigned long long) timeSinceLastUpdate) * ioc.IOCRate + ioc.TimerFracBit)>>16;
   long tmpL;
   int result;
 
-  tmpL = ioc.TimerInputLatch[toget];
-  if (tmpL == 0) tmpL = 1;
+  tmpL = ioc.TimerInputLatch[toget]+1;
   result = ioc.TimerCount[toget] - (scaledTimeSlip % tmpL);
   if (result < 0) result += tmpL;
 
@@ -172,8 +171,7 @@ static void UpdateTimerRegisters_Internal(ARMul_State *state,CycleCount nowtime,
   CycleDiff nextTrigger = ioc.InvIOCRate; /* a.k.a. 65536 IOC cycles from now */
 
   /* ----------------------------------------------------------------- */
-  tmpL = ioc.TimerInputLatch[0];
-  if (tmpL == 0) tmpL = 1;
+  tmpL = ioc.TimerInputLatch[0]+1;
   if (ioc.TimerCount[0] < scaledTimeSlip) {
     KBD.TimerIntHasHappened++;
     ioc.IRQStatus |= IRQA_TM0;
@@ -189,8 +187,7 @@ static void UpdateTimerRegisters_Internal(ARMul_State *state,CycleCount nowtime,
   }
 
   /* ----------------------------------------------------------------- */
-  tmpL = ioc.TimerInputLatch[1];
-  if (tmpL == 0) tmpL = 1;
+  tmpL = ioc.TimerInputLatch[1]+1;
   if (ioc.TimerCount[1] < scaledTimeSlip) {
     ioc.IRQStatus |= IRQA_TM1;
     IO_UpdateNirq(state);
@@ -206,14 +203,16 @@ static void UpdateTimerRegisters_Internal(ARMul_State *state,CycleCount nowtime,
 
   /* ----------------------------------------------------------------- */
   if (ioc.TimerInputLatch[2]) {
-    ioc.TimerCount[2] -= (scaledTimeSlip % ioc.TimerInputLatch[2]);
-    if(ioc.TimerCount[2] < 0) ioc.TimerCount[2] += ioc.TimerInputLatch[2];
+    tmpL = ioc.TimerInputLatch[2]+1;
+    ioc.TimerCount[2] -= (scaledTimeSlip % tmpL);
+    if(ioc.TimerCount[2] < 0) ioc.TimerCount[2] += tmpL;
   }
 
   /* ----------------------------------------------------------------- */
   if (ioc.TimerInputLatch[3]) {
-    ioc.TimerCount[3] -= (scaledTimeSlip % ioc.TimerInputLatch[3]);
-    if(ioc.TimerCount[3] < 0) ioc.TimerCount[3] += ioc.TimerInputLatch[3];
+    tmpL = ioc.TimerInputLatch[3]+1;
+    ioc.TimerCount[3] -= (scaledTimeSlip % tmpL);
+    if(ioc.TimerCount[3] < 0) ioc.TimerCount[3] += tmpL;
   }
 
   ioc.TimersLastUpdated = nowtime;

@@ -30,7 +30,7 @@
 
 #define MAX_BATCH_SIZE 1024
 
-int Sound_BatchSize = 1; /* How many DMA fetches to try to do at once */
+int Sound_BatchSize = 1; /* How many 16*2 sample batches to try to do at once */
 unsigned long Sound_DMARate; /* How many cycles between DMA fetches */
 Sound_StereoSense eSound_StereoSense = Stereo_LeftRight;
 int Sound_FudgeRate = 0;
