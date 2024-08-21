@@ -25,6 +25,8 @@
 
 #include "ControlPane.h"
 
+#define USE_PAL_DISPLAY
+
 static void UpdateCursorPos(ARMul_State *state);
 static void InitModeTable(void);
 
@@ -34,11 +36,12 @@ typedef struct {
   int w;
   int h;
   int aspect; /* Aspect ratio: 1 = wide pixels, 2 = square pixels, 4 = tall pixels */
+  int depths; /* Bitmask of supported display depths */
 } HostMode;
 HostMode *ModeList;
 int NumModes;
 
-static HostMode *SelectROScreenMode(int x, int y, int aspect, int *outxscale, int *outyscale);
+static HostMode *SelectROScreenMode(int x, int y, int aspect, int depths, int *outxscale, int *outyscale);
 
 #ifndef PROFILE_ENABLED /* Profiling code uses a nasty hack to estimate program size, which will only work if we're using the wimpslot for our heap */
 const char * const __dynamic_da_name = "ArcEm Heap";
@@ -50,6 +53,7 @@ const char * const __dynamic_da_name = "ArcEm Heap";
 #define MODE_VAR_ADDR 3
 #define MODE_VAR_XEIG 4
 #define MODE_VAR_YEIG 5
+#define MODE_VAR_LOG2BPP 6
 
 static const ARMword ModeVarsIn[] = {
  11, /* Width-1 */
@@ -58,15 +62,61 @@ static const ARMword ModeVarsIn[] = {
  148, /* Address */
  4, /* XEig */
  5, /* YEig */
+ 9, /* log2 BPP */
  -1,
 };
 
-static ARMword ModeVarsOut[6];
+static ARMword ModeVarsOut[7];
 
 static int CursorXOffset=0; /* How many columns were skipped from the left edge of the cursor image */
 
+static int ChangeMode(const HostMode *mode,int depth)
+{
+  static const HostMode *current_mode=NULL;
+  static int current_depth=-1;
+  while(!(mode->depths & (1<<depth)) && ((1<<depth) < mode->depths))
+    depth++;
+  if((mode != current_mode) || (depth != current_depth))
+  {
+    /* Change mode */
+    int block[8];
+    block[0] = 1;
+    block[1] = mode->w;
+    block[2] = mode->h;
+    block[3] = depth;
+    block[4] = -1;
+    if(depth == 3)
+    {
+      block[5] = 3;
+      block[6] = 255;
+      block[7] = -1;
+    }
+    else
+    {
+      block[5] = -1;
+    }
+    _kernel_oserror *err = _swix(OS_ScreenMode, _INR(0,1), 0, &block);
+    if(err)
+    {
+      fprintf(stderr,"Failed to change screen mode: Error %d %s\n",err->errnum,err->errmess);
+      exit(EXIT_FAILURE);
+    }
+  
+    /* Remove text cursor from real RO */
+    _swi(OS_RemoveCursors,0);
+
+    current_mode = mode;
+    current_depth = depth;
+  }
+  
+  _swi(OS_ReadVduVariables,_INR(0,1),ModeVarsIn,ModeVarsOut);
+
+  return depth;
+}
+
 /* ------------------------------------------------------------------ */
 
+#ifndef USE_PAL_DISPLAY
 /* Standard display device */
 
 typedef unsigned short SDD_HostColour;
@@ -125,27 +175,8 @@ static void SDD_Name(Host_ChangeMode)(ARMul_State *state,int width,int height,in
   else
     aspect = 2;
 
-  HostMode *mode = SelectROScreenMode(width,height,aspect,&HD.XScale,&HD.YScale);
-  static HostMode *current_mode=NULL;
-  if(mode != current_mode)
-  {
-    /* Change mode */
-    int block[6];
-    block[0] = 1;
-    block[1] = mode->w;
-    block[2] = mode->h;
-    block[3] = 4;
-    block[4] = -1;
-    block[5] = -1;
-    _swi(OS_ScreenMode, _INR(0,1), 0, &block);
-  
-    /* Remove text cursor from real RO */
-    _swi(OS_RemoveCursors,0);
-
-    current_mode = mode;
-  }
-  
-  _swi(OS_ReadVduVariables,_INR(0,1),ModeVarsIn,ModeVarsOut);
+  HostMode *mode = SelectROScreenMode(width,height,aspect,1<<4,&HD.XScale,&HD.YScale);
+  ChangeMode(mode,4);
   HD.Width = ModeVarsOut[MODE_VAR_WIDTH]+1; /* Should match mode->w, mode->h, but use these just to make sure */
   HD.Height = ModeVarsOut[MODE_VAR_HEIGHT]+1;
   
@@ -154,7 +185,88 @@ static void SDD_Name(Host_ChangeMode)(ARMul_State *state,int width,int height,in
   /* Screen is expected to be cleared */
   _swi(OS_WriteC,_IN(0),12);
 }
+#else
+/* Palettised display code */
+#define PDD_Name(x) pdd_##x
 
+static void PDD_Name(Host_ChangeMode)(ARMul_State *state,int width,int height,int depth,int hz);
+
+static void PDD_Name(Host_SetPaletteEntry)(ARMul_State *state,int i,unsigned int phys)
+{
+  char buf[5];
+  buf[0] = i;
+  buf[1] = 16;
+  buf[2] = (phys & 0xf)*0x11;
+  buf[3] = ((phys>>4) & 0xf)*0x11;
+  buf[4] = ((phys>>8) & 0xf)*0x11;
+  _swix(OS_Word,_INR(0,1),12,buf);
+}
+
+static inline ARMword *PDD_Name(Host_GetRow)(ARMul_State *state,int row,int offset,int *outoffset)
+{
+  ARMword base = ModeVarsOut[MODE_VAR_ADDR] + ModeVarsOut[MODE_VAR_BPL]*row;
+  offset = offset<<ModeVarsOut[MODE_VAR_LOG2BPP];
+  base += offset>>3;
+  *outoffset = (offset & 0x7) | ((base<<3) & 0x18); /* Just in case bytes per line isn't aligned */
+  base &= ~0x3;
+  return (ARMword *) base;
+}
+
+static void PDD_Name(Host_PollDisplay)(ARMul_State *state);
+
+#include "../arch/paldisplaydev.c"
+
+void PDD_Name(Host_ChangeMode)(ARMul_State *state,int width,int height,int depth,int hz)
+{
+  /* Search the mode list for the best match */
+  int aspect;
+  if(width*2 <= height)
+    aspect = 1;
+  else if(width >= height*2)
+    aspect = 4;
+  else
+    aspect = 2;
+
+  HostMode *mode = SelectROScreenMode(width,height,aspect,(0xf<<depth)&0xf,&HD.XScale,&HD.YScale);
+  int realdepth = ChangeMode(mode,depth);
+  
+  HD.Width = ModeVarsOut[MODE_VAR_WIDTH]+1; /* Should match mode->w, mode->h, but use these just to make sure */
+  HD.Height = ModeVarsOut[MODE_VAR_HEIGHT]+1;
+
+  /* Calculate expansion params */
+  if(HD.ExpandTable)
+  {
+    free(HD.ExpandTable);
+    HD.ExpandTable = NULL;
+  }
+  if((realdepth == depth) && (HD.XScale == 1))
+  {
+    /* No expansion */
+  }
+  else
+  {
+    /* Expansion! */
+    HD.ExpandFactor = 0;
+    while((1<<HD.ExpandFactor) < HD.XScale)
+      HD.ExpandFactor++;
+    HD.ExpandFactor += (realdepth-depth);
+    HD.ExpandTable = (ARMword *) malloc(4*GetExpandTableSize(1<<depth,HD.ExpandFactor));
+    unsigned int mul = 1;
+    int i;
+    for(i=0;i<HD.XScale;i++)
+    {
+      mul |= 1<<(i*(1<<realdepth));
+    }
+    GenExpandTable(HD.ExpandTable,1<<depth,HD.ExpandFactor,mul);
+  }
+  
+  fprintf(stderr,"Emu mode %dx%dx%d aspect %.1f mapped to real mode %dx%dx%d aspect %.1f, with scale factors %dx%d\n",width,height,depth,((float)aspect)/2.0f,mode->w,mode->h,realdepth,((float)mode->aspect)/2.0f,HD.XScale,HD.YScale);
+
+  /* Screen is expected to be cleared */
+  _swi(OS_WriteC,_IN(0),12);
+}
+
+#endif
 
 /* ------------------------------------------------------------------ */
 
@@ -253,8 +365,13 @@ static void RefreshMouse(ARMul_State *state) {
 }; /* RefreshMouse */
 
 
+#ifdef USE_PAL_DISPLAY
+void
+PDD_Name(Host_PollDisplay)(ARMul_State *state)
+#else
 void
 SDD_Name(Host_PollDisplay)(ARMul_State *state)
+#endif
 {
   RefreshMouse(state);
 
@@ -313,7 +430,11 @@ DisplayDev_Init(ARMul_State *state)
   _swi(OS_Byte,_INR(0,2)|_OUT(1),247,0xaa,0,&old_break);
   atexit(restorebreak);
 
+#ifdef USE_PAL_DISPLAY
+  return DisplayDev_Set(state,&PDD_DisplayDev);
+#else
   return DisplayDev_Set(state,&SDD_DisplayDev);
+#endif
 } /* DisplayKbd_InitHost */
 
 
@@ -477,9 +598,6 @@ static void InitModeTable(void)
     /* Too small? */
     if((mode[2] < hArcemConfig.iMinResX) || (mode[3] < hArcemConfig.iMinResY))
       goto next;
-    /* Wrong colour depth? */
-    if(mode[4] != 4)
-      goto next;
     /* Not exact scale for an LCD? */
     if(hArcemConfig.iLCDResX)
     {
@@ -498,10 +616,14 @@ static void InitModeTable(void)
     int i;
     for(i=NumModes-1;i>=0;i--)
       if((ModeList[i].w == mode[2]) && (ModeList[i].h == mode[3]))
+      {
+        ModeList[i].depths |= 1<<mode[4];
         goto next;
+      }
     /* Add it to our list */
     ModeList[NumModes].w = mode[2];
     ModeList[NumModes].h = mode[3];
+    ModeList[NumModes].depths = 1<<mode[4];
     if(mode[2]*2 <= mode[3])
       ModeList[NumModes].aspect = 1;
     else if(mode[2] >= mode[3]*2)
@@ -562,7 +684,7 @@ static float ScaleCost(int xscale,int yscale)
   return (((((float)yscale)-1.0f)*1.5f)+1.0f)*xscale; /* Y scaling (probably) has a higher cost than X scaling */
 }
 
-static HostMode *SelectROScreenMode(int x, int y, int aspect, int *outxscale,int *outyscale)
+static HostMode *SelectROScreenMode(int x, int y, int aspect, int depths, int *outxscale,int *outyscale)
 {
   HostMode *bestmode=NULL;
   int bestxscale=1,bestyscale=1;
@@ -570,6 +692,8 @@ static HostMode *SelectROScreenMode(int x, int y, int aspect, int *outxscale,int
   int i;
   for(i=0;i<NumModes;i++)
   {
+    if(!(ModeList[i].depths & depths))
+      continue;
     int xscale=1,yscale=1;
     float score = ComputeFit(&ModeList[i],x,y,aspect,&xscale,&yscale);
     if((score > bestscore) || ((score == bestscore) && (ScaleCost(xscale,yscale) < ScaleCost(bestxscale,bestyscale))))
@@ -582,7 +706,7 @@ static HostMode *SelectROScreenMode(int x, int y, int aspect, int *outxscale,int
   }
   if(!bestmode)
   {
-    fprintf(stderr,"Failed to find suitable screen mode for %dx%d, aspect %.1f\n",x,y,((float)aspect)/2.0f);
+    fprintf(stderr,"Failed to find suitable screen mode for %dx%d, aspect %.1f, depths %x\n",x,y,((float)aspect)/2.0f,depths);
     exit(EXIT_FAILURE);
   }
   *outxscale = bestxscale;
