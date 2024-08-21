@@ -70,10 +70,6 @@ prof_fmt_str:
 .global	Prof_End
 .global	Prof_Dump
 
-@ force dynamic areas off (unixlib seems to be using them even though we don't have arcem$heap set?)
-.global	__dynamic_no_da
-__dynamic_no_da:
-
 Prof_Init:
 	mov	ip, sp
 	stmfd	sp!, {v5-v6, fp, ip, lr, pc}

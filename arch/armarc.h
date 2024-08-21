@@ -22,9 +22,6 @@
 #define MEMORY_0x2000000_RAM_PHYS     0x2000000
 
 
-/* Erm - this has to be 256....*/
-#define UPDATEBLOCKSIZE 256
-
 typedef void (*ARMEmuFunc)(ARMul_State *state, ARMword instr, ARMword pc);
 
 ARMEmuFunc ARMul_Emulate_DecodeInstr(ARMword instr);

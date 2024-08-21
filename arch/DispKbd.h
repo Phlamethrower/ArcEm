@@ -10,16 +10,14 @@
 
 #define KBDBUFFLEN 128
 
+#define UPDATEBLOCKSIZE 256
+
+/* Set this to something different if you're not using 16bpp output */
+typedef unsigned short HostPixel;
+
 typedef struct {
   int KeyColToSend, KeyRowToSend, KeyUpNDown;
 } KbdEntry;
-
-
-#if defined(SYSTEM_win) || defined(MACOSX)
-typedef struct {
-  unsigned int red, green, blue;
-} XColor;
-#endif
 
 typedef enum {
   KbdState_JustStarted,
@@ -34,37 +32,16 @@ typedef enum {
 } KbdStates;
 
 struct DisplayInfo {
-  struct {
-    int MustRedraw;       /* Set to 1 by emulator if something major changes */
-#if defined(SYSTEM_X)
-    /* These three flags indicate VIDC's palette registers have
-     * changed without the host's equivalent structure being updated
-     * to match. */
-    char video_palette_dirty;
-    char border_palette_dirty;
-    char cursor_palette_dirty;
-#else
-    int MustResetPalette; /* Set to 1 by emulator if something major changes */
-#endif
-
-    /* Matches the ones in the memory model - if they are different redraw */
-    unsigned int UpdateFlags[(512*1024)/256];
-
-    /* min and max values which need refereshing on the X display */
-    int miny,maxy;
-
-    int DoingMouseFollow; /* If true following the mouse */
-  } Control;
-
+  /* Raw VIDC registers, except where noted */
   struct {
     unsigned int Palette[16];
-    unsigned int BorderCol;
+    HostPixel BorderCol; /* Border colour in host format */ 
     unsigned int CursorPalette[3];
     unsigned int Horiz_Cycle;
     unsigned int Horiz_SyncWidth;
     unsigned int Horiz_BorderStart;
-    unsigned int Horiz_DisplayStart; /* In 2 pixel units */
-    unsigned int Horiz_DisplayEnd;   /* In 2 pixel units */
+    unsigned int Horiz_DisplayStart;
+    unsigned int Horiz_DisplayEnd;
     unsigned int Horiz_BorderEnd;
     unsigned int Horiz_CursorStart;
     unsigned int Horiz_Interlace;
@@ -80,21 +57,6 @@ struct DisplayInfo {
     unsigned int ControlReg;
     unsigned int StereoImageReg[8];
   } Vidc;
-
-#if defined(WIN32) || defined(MACOSX)
-  struct {
-    char *ImageData,*CursorImageData;
-
-    /* Map from host memory contents to 'pixel' value for putpixel */
-    unsigned long pixelMap[256];
-
-    /* Map from host memory contents to 'pixel' value for putpixel in cursor*/
-    unsigned long cursorPixelMap[4];
-    int red_shift,red_prec;
-    int green_shift,green_prec;
-    int blue_shift,blue_prec;
-  } HostDisplay;
-#endif
 
   struct arch_keyboard {
     KbdStates KbdState;
@@ -118,6 +80,38 @@ struct DisplayInfo {
     int BuffOcc;
     int TimerIntHasHappened;
   } Kbd;
+
+  struct {
+    /* Values which get updated by external code */
+
+    unsigned int DirtyPalette; /* Bit flags of which palette entries have been modified */
+    char ModeChanged; /* Set if any registers change which may require the host to change mode. Remains set until valid mode is available from host (suspends all display output) */
+
+    /* Values that must only get updated by the event queue/screen blit code */
+    
+    char ForceRefresh; /* =1 for the entire frame if the mode has just changed */
+    char DMAEn; /* 1/0 whether video DMA is enabled for this frame */ 
+    int LastHostWidth,LastHostHeight,LastHostHz; /* Values we used to request host mode */
+    int LastRow; /* Row last event was scheduled to run up to */
+    int NextRow; /* Row next event is scheduled to run up to */
+    int MaxRow; /* Row to stop at for this frame */
+    unsigned int VIDC_CR; /* Control register value in use for this frame */
+    unsigned int LineRate; /* Line rate, measured in EmuRate clock cycles */
+    unsigned int Vptr; /* DMA pointer, in bits, as offset from start of phys RAM */
+    unsigned int LastVinit; /* Last Vinit, so we can sync changes with the frame start */
+  } Control;
+
+  struct {
+    /* The host must update these on DisplayKbd_HostChangeMode */
+    int Width,Height,XScale,YScale; /* Host display mode */
+
+    /* The core handles these */
+    int XOffset,YOffset; /* X & Y offset of first display pixel in host */
+    HostPixel Palette[256]; /* Host palette */
+    HostPixel BorderCol[1024]; /* Last border colour used for each scanline */
+    unsigned int RefreshFlags[1024/32]; /* Bit flags of which display scanlines need full refresh due to Vstart/Vend/palette changes */
+    unsigned int UpdateFlags[1024][(512*1024)/UPDATEBLOCKSIZE]; /* Flags for each scanline (ouch!) */
+  } HostDisplay;
 };
 
 
@@ -141,20 +135,15 @@ struct DisplayInfo {
 
 /* Functions each Host must provide */
 void DisplayKbd_InitHost(ARMul_State *state);
-int DisplayKbd_PollHost(ARMul_State *state);
-void VIDC_PutVal(ARMul_State *state,ARMword address, ARMword data,int bNw);
+int DisplayKbd_PollHostKbd(ARMul_State *state);
+void DisplayKbd_PollHostDisplay(ARMul_State *state); /* Called at start of each frame */
+HostPixel DisplayKbd_HostColour(ARMul_State *state,unsigned int col); /* Convert 13-bit VIDC physical colour to host format */
+void DisplayKbd_HostChangeMode(ARMul_State *state,int width,int height,int hz); /* Try and change to the given screen mode */
+HostPixel *DisplayKbd_GetScanline(ARMul_State *state,int line); /* Return pointer to start of host scanline in host video memory */
 
-#ifdef SYSTEM_X
-
-/* Adjust to gaining or losing the keyboard and pointer focus. */
-void hostdisplay_change_focus(int focus);
-
-#endif
 
 /* Functions defined in DispKbdShared.c */
-void MarkAsUpdated(ARMul_State *state, int end);
-int QueryRamChange(ARMul_State *state, unsigned int offset, int len);
-void CopyScreenRAM(ARMul_State *state, unsigned int offset, int len, char *Buffer);
 void DisplayKbd_Init(ARMul_State *state);
+void VIDC_PutVal(ARMul_State *state,ARMword address, ARMword data,int bNw);
 
 #endif
