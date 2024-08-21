@@ -77,6 +77,21 @@ static void RefreshMouse(ARMul_State *state) {
 
   height = VIDC.Vert_CursorEnd - VIDC.Vert_CursorStart;
 
+  /* TODO - Support for more cursor scales, e.g. 2x2 */
+  if(height && (height <= 16) && (HOSTDISPLAY.YScale == 2) && (HOSTDISPLAY.XScale == 1))
+  {
+    /* line-double the cursor image */
+    static ARMword double_data[2*32];
+    int i;
+    for(i=0;i<height;i++)
+    {
+      double_data[i*4+0] = double_data[i*4+2] = pointer_data[i*2];
+      double_data[i*4+1] = double_data[i*4+3] = pointer_data[i*2+1];
+    }
+    height *= 2;
+    pointer_data = double_data;
+  }    
+
   {
     char block[10];
 
@@ -90,6 +105,7 @@ static void RefreshMouse(ARMul_State *state) {
     block[7] = (((int) pointer_data) & 0x0000FF00)>>8;
     block[8] = (((int) pointer_data) & 0x00FF0000)>>16;
     block[9] = (((int) pointer_data) & 0xFF000000)>>24;
+
     _swi(OS_Word,_INR(0,1), 21, &block);
   }
 
@@ -153,8 +169,8 @@ static void UpdateCursorPos(ARMul_State *state) {
   int xeig=_swi(OS_ReadModeVariable,_INR(0,1)|_RETURN(2),-1,4);
   int yeig=_swi(OS_ReadModeVariable,_INR(0,1)|_RETURN(2),-1,5);
 
-  internal_x=(VIDC.Horiz_CursorStart-(VIDC.Horiz_DisplayStart*2))+HOSTDISPLAY.XOffset;
-  internal_y=(VIDC.Vert_CursorStart-VIDC.Vert_DisplayStart)+HOSTDISPLAY.YOffset;
+  internal_x=(VIDC.Horiz_CursorStart-(VIDC.Horiz_DisplayStart*2))*HOSTDISPLAY.XScale+HOSTDISPLAY.XOffset;
+  internal_y=(VIDC.Vert_CursorStart-VIDC.Vert_DisplayStart)*HOSTDISPLAY.YScale+HOSTDISPLAY.YOffset;
 
   block[0]=5;
   {
@@ -319,7 +335,7 @@ HostPixel DisplayKbd_HostColour(ARMul_State *state,unsigned int col)
   r |= r>>4;
   g |= g>>4;
   b |= b>>4;
-#if 1
+#if 0
   /* Red/blue swapped Iyonix :( */
   return (r<<10) | (g<<5) | (b);
 #else
@@ -347,10 +363,16 @@ void DisplayKbd_HostChangeMode(ARMul_State *state,int width,int height,int hz)
   HD.Height = ModeVarsOut[1]+1;
   HD.XScale = 1;
   HD.YScale = 1;
-#if 0
-  /* Scale up to fill screen */
-  HD.XScale = HD.Width/width;
-  HD.YScale = HD.Height/height;
+  /* Try and detect rectangular pixel modes */
+  if((width >= height*2) && (height*2 <= HD.Height))
+    HD.YScale = 2;
+#if 0 /* Too slow at the moment, mainly due to lame vertical scaling */
+  /* Apply global 2* scaling if possible */
+  if((width*2 <= HD.Width) && (height*(HD.YScale+1) <= HD.Height))
+  {
+    HD.XScale++;
+    HD.YScale++;
+  }
 #endif
   /* Screen is expected to be cleared */
   _swix(OS_WriteC,_IN(0),12);

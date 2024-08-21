@@ -31,6 +31,66 @@
 /* How many rows for video to process at once */
 #define ROWS_AT_ONCE 2
 
+#define VIDEO_STATS
+
+#ifdef VIDEO_STATS
+#define VIDEO_STAT(STAT,COND,AMT) if(COND) {vidstats[vidstat_##STAT] += AMT;}
+#else
+#define VIDEO_STAT(STAT,COND,AMT) ((void)0)
+#endif
+
+#ifdef VIDEO_STATS
+enum vidstat {
+  vidstat_BorderRedraw,
+  vidstat_BorderRedrawForced,
+  vidstat_BorderRedrawColourChanged,
+  vidstat_DisplayRowRedraw,
+  vidstat_DisplayRedraw,
+  vidstat_DisplayRedrawForced,
+  vidstat_DisplayRedrawUpdated,
+  vidstat_DisplayBits,
+  vidstat_DisplayRowForce,
+  vidstat_DisplayFullForce,
+  vidstat_DisplayRows,
+  vidstat_DisplayFrames,
+  vidstat_ForceRefreshDMA,
+  vidstat_ForceRefreshBPP,
+  vidstat_RefreshFlagsVinit,
+  vidstat_RefreshFlagsPalette,
+  vidstat_MAX,
+};
+static unsigned int vidstats[vidstat_MAX];
+static const char *vidstatnames[vidstat_MAX] = {
+ "BorderRedraw: Total border redraws",
+ "BorderRedrawForced: Total forced border redraws",
+ "BorderRedrawColourChanged: Total border redraws due to colour change",
+ "DisplayRowRedraw: Number of rows where display data was updated",
+ "DisplayRedraw: Number of blocks/sections updated",
+ "DisplayRedrawForced: Number of forced blocks/sections updated",
+ "DisplayRedrawUpdated: Number of blocks/sections updated",
+ "DisplayBits: Number of display bits updated",
+ "DisplayRowForce: Number of display row redraws due to DC.RefreshFlags",
+ "DisplayFullForce: Number of display row redraws due to DC.ForceRefresh",
+ "DisplayRows: Total number of rows processed",
+ "DisplayFrames: Total number of frames processed",
+ "ForceRefreshDMA: Frames where ForceRefresh was set due to DMA enable toggle",
+ "ForceRefreshBPP: Frames where ForceRefresh was set due to BPP change",
+ "RefreshFlagsVinit: Frames where RefreshFlags were set due to Vinit change",
+ "RefreshFlagsPalette: Palette writes causing RefreshFlags to be set",
+};
+
+static void vidstats_Dump(const char *c)
+{
+  puts(c);
+  int i;
+  for(i=0;i<vidstat_MAX;i++)
+  {
+    printf("%12u %s\n",vidstats[i],vidstatnames[i]);
+    vidstats[i] = 0;
+  }
+}
+#endif
+
 /*
 
   FDC/HDC/keyboard
@@ -68,44 +128,17 @@ static void Keyboard_Poll(ARMul_State *state,CycleCount nowtime)
 
 /*
 
-  Display - Screen output funcs
+  Display - Palette updates
 
 */
 
-static const unsigned int PixelClocks[4] = {8000000,12000000,16000000,24000000};
-
-static void Display_BorderRow(ARMul_State *state,int row)
+static inline void Display_PaletteUpdate(ARMul_State *state,HostPixel *Palette,int num)
 {
-  /* Render a border row */
-  HostPixel col = VIDC.BorderCol;
-  if(!DC.ForceRefresh && (HD.BorderCol[row] == col))
-    return;
-  HD.BorderCol[row] = col;
-  int hoststart = (row-(VIDC.Vert_DisplayStart+1))*HD.YScale+HD.YOffset;
-  int hostend = hoststart + HD.YScale;
-  if(hoststart < 0)
-    hoststart = 0;
-  if(hostend > HD.Height)
-    hostend = HD.Height;
-  while(hoststart < hostend)
-  {
-    HostPixel *pix = DisplayKbd_GetScanline(state,hoststart++);
-    int i;
-    for(i=0;i<HD.Width;i++)
-      *pix++ = col;
-  }
-}
-
-typedef int (*Display_RowFunc)(ARMul_State *state,int row,HostPixel *out,int force);
-
-static int Display_RowFunc1bpp(ARMul_State *state,int row,HostPixel *out,int force)
-{
-  int i;
-  HostPixel *Palette = HD.Palette;
-  /* Handle palette updates */
+  /* Might be better if caller does this check? */
   if(DC.DirtyPalette)
   {
-    for(i=0;i<2;i++)
+    int i;
+    for(i=0;i<num;i++)
     {
       if(DC.DirtyPalette & (1<<i))
       {
@@ -114,13 +147,55 @@ static int Display_RowFunc1bpp(ARMul_State *state,int row,HostPixel *out,int for
     }
     DC.DirtyPalette = 0;
   }
+}
+
+static inline void Display_PaletteUpdate8bpp(ARMul_State *state,HostPixel *Palette)
+{
+  /* Might be better if caller does this check? */
+  if(DC.DirtyPalette)
+  {
+    int i;
+    for(i=0;i<16;i++)
+    {
+      if(DC.DirtyPalette & (1<<i))
+      {
+        int j;
+        /* Deal with the funky 8bpp palette */
+        unsigned int Base = VIDC.Palette[i] & 0x1727; /* Only these bits of the palette entry are used in 8bpp modes */
+        static const unsigned int ExtraPal[16] = {
+          0x000, 0x008, 0x040, 0x048, 0x080, 0x088, 0x0c0, 0x0c8,
+          0x800, 0x808, 0x840, 0x848, 0x880, 0x888, 0x8c0, 0x8c8
+        };
+        for(j=0;j<16;j++)
+        {
+          Palette[i+(j<<4)] = DisplayKbd_HostColour(state,Base | ExtraPal[j]);
+        }
+      }
+    }
+    DC.DirtyPalette = 0;
+  }
+}
+
+/*
+
+  Display - Screen output for 1X horizontal scaling
+
+*/
+
+typedef int (*Display_RowFunc)(ARMul_State *state,int row,HostPixel *out,int force);
+
+static int Display_RowFunc1bpp1X(ARMul_State *state,int row,HostPixel *out,int force)
+{
+  int i;
+  HostPixel *Palette = HD.Palette;
+  /* Handle palette updates */
+  Display_PaletteUpdate(state,Palette,2);
 
   unsigned int Vptr = DC.Vptr;
   unsigned int Vstart = MEMC.Vstart<<7;
   unsigned int Vend = (MEMC.Vend+1)<<7; /* Point to pixel after end */
   const unsigned char *RAM = (unsigned char *) MEMC.PhysRam;
   int Remaining = DC.LastHostWidth;
-//  int Scale = HD.XScale;
   int Updated = 0;
 
   /* Sanity checks to avoid looping forever */
@@ -141,6 +216,10 @@ static int Display_RowFunc1bpp(ARMul_State *state,int row,HostPixel *out,int for
       
     if(force || (HD_UpdateFlags[FlagsOffset] != MEMC_UpdateFlags[FlagsOffset]))
     {
+      VIDEO_STAT(DisplayRedraw,1,1);
+      VIDEO_STAT(DisplayRedrawForced,force,1);
+      VIDEO_STAT(DisplayRedrawUpdated,(HD_UpdateFlags[FlagsOffset] != MEMC_UpdateFlags[FlagsOffset]),1);
+      VIDEO_STAT(DisplayBits,1,Available);
       Updated = 1;
       /* Process the pixels in this region, stopping at end of row/update block/Vend */
       const unsigned char *In = RAM+(Vptr>>3);
@@ -172,43 +251,35 @@ static int Display_RowFunc1bpp(ARMul_State *state,int row,HostPixel *out,int for
   {
     Vptr = startVptr;
     Remaining = startRemain;
-    unsigned int FlagsOffset = Vptr/(8*UPDATEBLOCKSIZE);
-    int Available = MIN(Remaining,MIN(((FlagsOffset+1)*8*UPDATEBLOCKSIZE)-Vptr,Vend-Vptr));
-
-    HD_UpdateFlags[FlagsOffset] = MEMC_UpdateFlags[FlagsOffset];
-    
-    Remaining -= Available;      
-    Vptr += Available;
-    if(Vptr >= Vend)
-      Vptr = Vstart;
+    while(Remaining > 0)
+    {
+      unsigned int FlagsOffset = Vptr/(8*UPDATEBLOCKSIZE);
+      int Available = MIN(Remaining,MIN(((FlagsOffset+1)*8*UPDATEBLOCKSIZE)-Vptr,Vend-Vptr));
+  
+      HD_UpdateFlags[FlagsOffset] = MEMC_UpdateFlags[FlagsOffset];
+      
+      Remaining -= Available;      
+      Vptr += Available;
+      if(Vptr >= Vend)
+        Vptr = Vstart;
+    }
   }
 
   return Updated;
 }
 
-static int Display_RowFunc2bpp(ARMul_State *state,int row,HostPixel *out,int force)
+static int Display_RowFunc2bpp1X(ARMul_State *state,int row,HostPixel *out,int force)
 {
   int i;
   HostPixel *Palette = HD.Palette;
   /* Handle palette updates */
-  if(DC.DirtyPalette)
-  {
-    for(i=0;i<4;i++)
-    {
-      if(DC.DirtyPalette & (1<<i))
-      {
-        Palette[i] = DisplayKbd_HostColour(state,VIDC.Palette[i]);
-      }
-    }
-    DC.DirtyPalette = 0;
-  }
+  Display_PaletteUpdate(state,Palette,4);
 
   unsigned int Vptr = DC.Vptr;
   unsigned int Vstart = MEMC.Vstart<<7;
   unsigned int Vend = (MEMC.Vend+1)<<7; /* Point to pixel after end */
   const unsigned char *RAM = (unsigned char *) MEMC.PhysRam;
   int Remaining = DC.LastHostWidth*2; /* Scale up to account for everything else counting in bits */
-//  int Scale = HD.XScale;
   int Updated = 0;
 
   /* Sanity checks to avoid looping forever */
@@ -230,6 +301,10 @@ static int Display_RowFunc2bpp(ARMul_State *state,int row,HostPixel *out,int for
       
     if(force || (HD_UpdateFlags[FlagsOffset] != MEMC_UpdateFlags[FlagsOffset]))
     {
+      VIDEO_STAT(DisplayRedraw,1,1);
+      VIDEO_STAT(DisplayRedrawForced,force,1);
+      VIDEO_STAT(DisplayRedrawUpdated,(HD_UpdateFlags[FlagsOffset] != MEMC_UpdateFlags[FlagsOffset]),1);
+      VIDEO_STAT(DisplayBits,1,Available);
       Updated = 1;
       /* Process the pixels in this region, stopping at end of row/update block/Vend */
       const unsigned char *In = RAM+(Vptr>>3);
@@ -261,36 +336,29 @@ static int Display_RowFunc2bpp(ARMul_State *state,int row,HostPixel *out,int for
   {
     Vptr = startVptr;
     Remaining = startRemain;
-    unsigned int FlagsOffset = Vptr/(8*UPDATEBLOCKSIZE);
-    int Available = MIN(Remaining,MIN(((FlagsOffset+1)*8*UPDATEBLOCKSIZE)-Vptr,Vend-Vptr));
-
-    HD_UpdateFlags[FlagsOffset] = MEMC_UpdateFlags[FlagsOffset];
-    
-    Remaining -= Available;      
-    Vptr += Available;
-    if(Vptr >= Vend)
-      Vptr = Vstart;
+    while(Remaining > 0)
+    {
+      unsigned int FlagsOffset = Vptr/(8*UPDATEBLOCKSIZE);
+      int Available = MIN(Remaining,MIN(((FlagsOffset+1)*8*UPDATEBLOCKSIZE)-Vptr,Vend-Vptr));
+  
+      HD_UpdateFlags[FlagsOffset] = MEMC_UpdateFlags[FlagsOffset];
+      
+      Remaining -= Available;      
+      Vptr += Available;
+      if(Vptr >= Vend)
+        Vptr = Vstart;
+    }
   }
 
   return Updated;
 }
 
-static int Display_RowFunc4bpp(ARMul_State *state,int row,HostPixel *out,int force)
+static int Display_RowFunc4bpp1X(ARMul_State *state,int row,HostPixel *out,int force)
 {
   int i;
   HostPixel *Palette = HD.Palette;
   /* Handle palette updates */
-  if(DC.DirtyPalette)
-  {
-    for(i=0;i<16;i++)
-    {
-      if(DC.DirtyPalette & (1<<i))
-      {
-        Palette[i] = DisplayKbd_HostColour(state,VIDC.Palette[i]);
-      }
-    }
-    DC.DirtyPalette = 0;
-  }
+  Display_PaletteUpdate(state,Palette,16);
 
 
   unsigned int Vptr = DC.Vptr;
@@ -298,7 +366,6 @@ static int Display_RowFunc4bpp(ARMul_State *state,int row,HostPixel *out,int for
   unsigned int Vend = (MEMC.Vend+1)<<7; /* Point to pixel after end */
   const unsigned char *RAM = (unsigned char *) MEMC.PhysRam;
   int Remaining = DC.LastHostWidth*4; /* Scale up to account for everything else counting in bits */
-//  int Scale = HD.XScale;
   int Updated = 0;
 
   /* Sanity checks to avoid looping forever */
@@ -320,6 +387,10 @@ static int Display_RowFunc4bpp(ARMul_State *state,int row,HostPixel *out,int for
       
     if(force || (HD_UpdateFlags[FlagsOffset] != MEMC_UpdateFlags[FlagsOffset]))
     {
+      VIDEO_STAT(DisplayRedraw,1,1);
+      VIDEO_STAT(DisplayRedrawForced,force,1);
+      VIDEO_STAT(DisplayRedrawUpdated,(HD_UpdateFlags[FlagsOffset] != MEMC_UpdateFlags[FlagsOffset]),1);
+      VIDEO_STAT(DisplayBits,1,Available);
       Updated = 1;
       /* Process the pixels in this region, stopping at end of row/update block/Vend */
 
@@ -347,54 +418,35 @@ static int Display_RowFunc4bpp(ARMul_State *state,int row,HostPixel *out,int for
   {
     Vptr = startVptr;
     Remaining = startRemain;
-    unsigned int FlagsOffset = Vptr/(8*UPDATEBLOCKSIZE);
-    int Available = MIN(Remaining,MIN(((FlagsOffset+1)*8*UPDATEBLOCKSIZE)-Vptr,Vend-Vptr));
-
-    HD_UpdateFlags[FlagsOffset] = MEMC_UpdateFlags[FlagsOffset];
-    
-    Remaining -= Available;      
-    Vptr += Available;
-    if(Vptr >= Vend)
-      Vptr = Vstart;
+    while(Remaining > 0)
+    {
+      unsigned int FlagsOffset = Vptr/(8*UPDATEBLOCKSIZE);
+      int Available = MIN(Remaining,MIN(((FlagsOffset+1)*8*UPDATEBLOCKSIZE)-Vptr,Vend-Vptr));
+  
+      HD_UpdateFlags[FlagsOffset] = MEMC_UpdateFlags[FlagsOffset];
+      
+      Remaining -= Available;      
+      Vptr += Available;
+      if(Vptr >= Vend)
+        Vptr = Vstart;
+    }
   }
 
   return Updated;
 }
 
-static int Display_RowFunc8bpp(ARMul_State *state,int row,HostPixel *out,int force)
+static int Display_RowFunc8bpp1X(ARMul_State *state,int row,HostPixel *out,int force)
 {
   int i;
   HostPixel *Palette = HD.Palette;
   /* Handle palette updates */
-  if(DC.DirtyPalette)
-  {
-    for(i=0;i<16;i++)
-    {
-      if(DC.DirtyPalette & (1<<i))
-      {
-        int j;
-        /* Deal with the funky 8bpp palette */
-        unsigned int Base = VIDC.Palette[i] & 0x1727; /* Only these bits of the palette entry are used in 8bpp modes */
-        static const unsigned int ExtraPal[16] = {
-          0x000, 0x008, 0x040, 0x048, 0x080, 0x088, 0x0c0, 0x0c8,
-          0x800, 0x808, 0x840, 0x848, 0x880, 0x888, 0x8c0, 0x8c8
-        };
-        for(j=0;j<16;j++)
-        {
-          Palette[i+(j<<4)] = DisplayKbd_HostColour(state,Base | ExtraPal[j]);
-        }
-      }
-    }
-    DC.DirtyPalette = 0;
-  }
-
+  Display_PaletteUpdate8bpp(state,Palette);
 
   unsigned int Vptr = DC.Vptr;
   unsigned int Vstart = MEMC.Vstart<<7;
   unsigned int Vend = (MEMC.Vend+1)<<7; /* Point to pixel after end */
   const unsigned char *RAM = (unsigned char *) MEMC.PhysRam;
   int Remaining = DC.LastHostWidth*8; /* Scale up to account for everything else counting in bits */
-//  int Scale = HD.XScale;
   int Updated = 0;
 
   /* Sanity checks to avoid looping forever */
@@ -416,6 +468,10 @@ static int Display_RowFunc8bpp(ARMul_State *state,int row,HostPixel *out,int for
       
     if(force || (HD_UpdateFlags[FlagsOffset] != MEMC_UpdateFlags[FlagsOffset]))
     {
+      VIDEO_STAT(DisplayRedraw,1,1);
+      VIDEO_STAT(DisplayRedrawForced,force,1);
+      VIDEO_STAT(DisplayRedrawUpdated,(HD_UpdateFlags[FlagsOffset] != MEMC_UpdateFlags[FlagsOffset]),1);
+      VIDEO_STAT(DisplayBits,1,Available);
       Updated = 1;
       /* Process the pixels in this region, stopping at end of row/update block/Vend */
 
@@ -442,31 +498,415 @@ static int Display_RowFunc8bpp(ARMul_State *state,int row,HostPixel *out,int for
   {
     Vptr = startVptr;
     Remaining = startRemain;
-    unsigned int FlagsOffset = Vptr/(8*UPDATEBLOCKSIZE);
-    int Available = MIN(Remaining,MIN(((FlagsOffset+1)*8*UPDATEBLOCKSIZE)-Vptr,Vend-Vptr));
-
-    HD_UpdateFlags[FlagsOffset] = MEMC_UpdateFlags[FlagsOffset];
-    
-    Remaining -= Available;      
-    Vptr += Available;
-    if(Vptr >= Vend)
-      Vptr = Vstart;
+    while(Remaining > 0)
+    {
+      unsigned int FlagsOffset = Vptr/(8*UPDATEBLOCKSIZE);
+      int Available = MIN(Remaining,MIN(((FlagsOffset+1)*8*UPDATEBLOCKSIZE)-Vptr,Vend-Vptr));
+  
+      HD_UpdateFlags[FlagsOffset] = MEMC_UpdateFlags[FlagsOffset];
+      
+      Remaining -= Available;      
+      Vptr += Available;
+      if(Vptr >= Vend)
+        Vptr = Vstart;
+    }
   }
 
   return Updated;
 }
 
-static const Display_RowFunc RowFuncs[4] = {Display_RowFunc1bpp,Display_RowFunc2bpp,Display_RowFunc4bpp,Display_RowFunc8bpp};
+/*
+
+  Display - Screen output for 2X horizontal scaling
+
+*/
+
+static int Display_RowFunc1bpp2X(ARMul_State *state,int row,HostPixel *out,int force)
+{
+  int i;
+  HostPixel *Palette = HD.Palette;
+  /* Handle palette updates */
+  Display_PaletteUpdate(state,Palette,2);
+
+  unsigned int Vptr = DC.Vptr;
+  unsigned int Vstart = MEMC.Vstart<<7;
+  unsigned int Vend = (MEMC.Vend+1)<<7; /* Point to pixel after end */
+  const unsigned char *RAM = (unsigned char *) MEMC.PhysRam;
+  int Remaining = DC.LastHostWidth;
+  int Updated = 0;
+
+  /* Sanity checks to avoid looping forever */
+  if((Vptr >= Vend) || (Vstart >= Vend))
+    return;
+  if(Vptr >= Vend)
+    Vptr = Vstart;
+
+  /* Process the row */
+  unsigned int startVptr = Vptr;
+  int startRemain = Remaining;
+  const unsigned int *MEMC_UpdateFlags = MEMC.UpdateFlags;
+  unsigned int *HD_UpdateFlags = HD.UpdateFlags[row];
+  while(Remaining > 0)
+  {
+    unsigned int FlagsOffset = Vptr/(8*UPDATEBLOCKSIZE);
+    int Available = MIN(Remaining,MIN(((FlagsOffset+1)*8*UPDATEBLOCKSIZE)-Vptr,Vend-Vptr));
+      
+    if(force || (HD_UpdateFlags[FlagsOffset] != MEMC_UpdateFlags[FlagsOffset]))
+    {
+      VIDEO_STAT(DisplayRedraw,1,1);
+      VIDEO_STAT(DisplayRedrawForced,force,1);
+      VIDEO_STAT(DisplayRedrawUpdated,(HD_UpdateFlags[FlagsOffset] != MEMC_UpdateFlags[FlagsOffset]),1);
+      VIDEO_STAT(DisplayBits,1,Available);
+      Updated = 1;
+      /* Process the pixels in this region, stopping at end of row/update block/Vend */
+      const unsigned char *In = RAM+(Vptr>>3);
+      unsigned int Bit = 1<<(Vptr & 7);
+      for(i=0;i<Available;i++)
+      {
+        int idx = (*In & Bit)?1:0;
+        out[0] = out[1] = Palette[idx];
+        out+=2;
+        Bit <<= 1;
+        if(Bit == 256)
+        {
+          Bit = 1;
+          In++;
+        }
+      }
+    }
+    else
+      out += Available<<1;
+
+    Remaining -= Available;      
+    Vptr += Available;
+    if(Vptr >= Vend)
+      Vptr = Vstart;
+  }
+  DC.Vptr = Vptr;
+        
+  /* If we updated anything, copy over the updated flags (Done last in case the same flags block is encountered multiple times in the same row) */
+  if(Updated)
+  {
+    Vptr = startVptr;
+    Remaining = startRemain;
+    while(Remaining > 0)
+    {
+      unsigned int FlagsOffset = Vptr/(8*UPDATEBLOCKSIZE);
+      int Available = MIN(Remaining,MIN(((FlagsOffset+1)*8*UPDATEBLOCKSIZE)-Vptr,Vend-Vptr));
+  
+      HD_UpdateFlags[FlagsOffset] = MEMC_UpdateFlags[FlagsOffset];
+      
+      Remaining -= Available;      
+      Vptr += Available;
+      if(Vptr >= Vend)
+        Vptr = Vstart;
+    }
+  }
+
+  return Updated;
+}
+
+static int Display_RowFunc2bpp2X(ARMul_State *state,int row,HostPixel *out,int force)
+{
+  int i;
+  HostPixel *Palette = HD.Palette;
+  /* Handle palette updates */
+  Display_PaletteUpdate(state,Palette,4);
+
+  unsigned int Vptr = DC.Vptr;
+  unsigned int Vstart = MEMC.Vstart<<7;
+  unsigned int Vend = (MEMC.Vend+1)<<7; /* Point to pixel after end */
+  const unsigned char *RAM = (unsigned char *) MEMC.PhysRam;
+  int Remaining = DC.LastHostWidth*2; /* Scale up to account for everything else counting in bits */
+  int Updated = 0;
+
+  /* Sanity checks to avoid looping forever */
+  if((Vptr >= Vend) || (Vstart >= Vend))
+    return;
+  if(Vptr >= Vend)
+    Vptr = Vstart;
+
+  /* Process the row */
+  unsigned int startVptr = Vptr;
+  int startRemain = Remaining;
+  const unsigned int *MEMC_UpdateFlags = MEMC.UpdateFlags;
+  unsigned int *HD_UpdateFlags = HD.UpdateFlags[row];
+  while(Remaining > 0)
+  {
+    unsigned int FlagsOffset = Vptr/(8*UPDATEBLOCKSIZE);
+    /* Note: This is the number of available bits, not pixels */
+    int Available = MIN(Remaining,MIN(((FlagsOffset+1)*8*UPDATEBLOCKSIZE)-Vptr,Vend-Vptr));
+      
+    if(force || (HD_UpdateFlags[FlagsOffset] != MEMC_UpdateFlags[FlagsOffset]))
+    {
+      VIDEO_STAT(DisplayRedraw,1,1);
+      VIDEO_STAT(DisplayRedrawForced,force,1);
+      VIDEO_STAT(DisplayRedrawUpdated,(HD_UpdateFlags[FlagsOffset] != MEMC_UpdateFlags[FlagsOffset]),1);
+      VIDEO_STAT(DisplayBits,1,Available);
+      Updated = 1;
+      /* Process the pixels in this region, stopping at end of row/update block/Vend */
+      const unsigned char *In = RAM+(Vptr>>3);
+      unsigned int Shift = (Vptr & 7);
+      for(i=0;i<Available;i+=2)
+      {
+        int idx = (*In >> Shift) & 3;
+        out[0] = out[1] = Palette[idx];
+        out+=2;
+        Shift += 2;
+        if(Shift == 8)
+        {
+          Shift = 0;
+          In++;
+        }
+      }
+    }
+    else
+      out += Available;
+
+    Remaining -= Available;      
+    Vptr += Available;
+    if(Vptr >= Vend)
+      Vptr = Vstart;
+  }
+  DC.Vptr = Vptr;
+        
+  /* If we updated anything, copy over the updated flags (Done last in case the same flags block is encountered multiple times in the same row) */
+  if(Updated)
+  {
+    Vptr = startVptr;
+    Remaining = startRemain;
+    while(Remaining > 0)
+    {
+      unsigned int FlagsOffset = Vptr/(8*UPDATEBLOCKSIZE);
+      int Available = MIN(Remaining,MIN(((FlagsOffset+1)*8*UPDATEBLOCKSIZE)-Vptr,Vend-Vptr));
+  
+      HD_UpdateFlags[FlagsOffset] = MEMC_UpdateFlags[FlagsOffset];
+      
+      Remaining -= Available;      
+      Vptr += Available;
+      if(Vptr >= Vend)
+        Vptr = Vstart;
+    }
+  }
+
+  return Updated;
+}
+
+static int Display_RowFunc4bpp2X(ARMul_State *state,int row,HostPixel *out,int force)
+{
+  int i;
+  HostPixel *Palette = HD.Palette;
+  /* Handle palette updates */
+  Display_PaletteUpdate(state,Palette,16);
+
+
+  unsigned int Vptr = DC.Vptr;
+  unsigned int Vstart = MEMC.Vstart<<7;
+  unsigned int Vend = (MEMC.Vend+1)<<7; /* Point to pixel after end */
+  const unsigned char *RAM = (unsigned char *) MEMC.PhysRam;
+  int Remaining = DC.LastHostWidth*4; /* Scale up to account for everything else counting in bits */
+  int Updated = 0;
+
+  /* Sanity checks to avoid looping forever */
+  if((Vptr >= Vend) || (Vstart >= Vend))
+    return;
+  if(Vptr >= Vend)
+    Vptr = Vstart;
+
+  /* Process the row */
+  unsigned int startVptr = Vptr;
+  int startRemain = Remaining;
+  const unsigned int *MEMC_UpdateFlags = MEMC.UpdateFlags;
+  unsigned int *HD_UpdateFlags = HD.UpdateFlags[row];
+  while(Remaining > 0)
+  {
+    unsigned int FlagsOffset = Vptr/(8*UPDATEBLOCKSIZE);
+    /* Note: This is the number of available bits, not pixels */
+    int Available = MIN(Remaining,MIN(((FlagsOffset+1)*8*UPDATEBLOCKSIZE)-Vptr,Vend-Vptr));
+      
+    if(force || (HD_UpdateFlags[FlagsOffset] != MEMC_UpdateFlags[FlagsOffset]))
+    {
+      VIDEO_STAT(DisplayRedraw,1,1);
+      VIDEO_STAT(DisplayRedrawForced,force,1);
+      VIDEO_STAT(DisplayRedrawUpdated,(HD_UpdateFlags[FlagsOffset] != MEMC_UpdateFlags[FlagsOffset]),1);
+      VIDEO_STAT(DisplayBits,1,Available);
+      Updated = 1;
+      /* Process the pixels in this region, stopping at end of row/update block/Vend */
+
+      /* Display will always be a multiple of 2 pixels wide, so we can simplify things a bit compared to 1/2bpp case */
+      const unsigned char *In = RAM+(Vptr>>3);      
+      for(i=0;i<Available;i+=8)
+      {
+        unsigned char Pixel = *In++;
+        out[0] = out[1] = Palette[Pixel & 0xf];
+        out[2] = out[3] = Palette[Pixel>>4];
+        out += 4;        
+      }
+    }
+    else
+      out += Available>>1;
+
+    Remaining -= Available;      
+    Vptr += Available;
+    if(Vptr >= Vend)
+      Vptr = Vstart;
+  }
+  DC.Vptr = Vptr;
+        
+  /* If we updated anything, copy over the updated flags (Done last in case the same flags block is encountered multiple times in the same row) */
+  if(Updated)
+  {
+    Vptr = startVptr;
+    Remaining = startRemain;
+    while(Remaining > 0)
+    {
+      unsigned int FlagsOffset = Vptr/(8*UPDATEBLOCKSIZE);
+      int Available = MIN(Remaining,MIN(((FlagsOffset+1)*8*UPDATEBLOCKSIZE)-Vptr,Vend-Vptr));
+  
+      HD_UpdateFlags[FlagsOffset] = MEMC_UpdateFlags[FlagsOffset];
+      
+      Remaining -= Available;      
+      Vptr += Available;
+      if(Vptr >= Vend)
+        Vptr = Vstart;
+    }
+  }
+
+  return Updated;
+}
+
+static int Display_RowFunc8bpp2X(ARMul_State *state,int row,HostPixel *out,int force)
+{
+  int i;
+  HostPixel *Palette = HD.Palette;
+  /* Handle palette updates */
+  Display_PaletteUpdate8bpp(state,Palette);
+
+  unsigned int Vptr = DC.Vptr;
+  unsigned int Vstart = MEMC.Vstart<<7;
+  unsigned int Vend = (MEMC.Vend+1)<<7; /* Point to pixel after end */
+  const unsigned char *RAM = (unsigned char *) MEMC.PhysRam;
+  int Remaining = DC.LastHostWidth*8; /* Scale up to account for everything else counting in bits */
+  int Updated = 0;
+
+  /* Sanity checks to avoid looping forever */
+  if((Vptr >= Vend) || (Vstart >= Vend))
+    return;
+  if(Vptr >= Vend)
+    Vptr = Vstart;
+
+  /* Process the row */
+  unsigned int startVptr = Vptr;
+  int startRemain = Remaining;
+  const unsigned int *MEMC_UpdateFlags = MEMC.UpdateFlags;
+  unsigned int *HD_UpdateFlags = HD.UpdateFlags[row];
+  while(Remaining > 0)
+  {
+    unsigned int FlagsOffset = Vptr/(8*UPDATEBLOCKSIZE);
+    /* Note: This is the number of available bits, not pixels */
+    int Available = MIN(Remaining,MIN(((FlagsOffset+1)*8*UPDATEBLOCKSIZE)-Vptr,Vend-Vptr));
+      
+    if(force || (HD_UpdateFlags[FlagsOffset] != MEMC_UpdateFlags[FlagsOffset]))
+    {
+      VIDEO_STAT(DisplayRedraw,1,1);
+      VIDEO_STAT(DisplayRedrawForced,force,1);
+      VIDEO_STAT(DisplayRedrawUpdated,(HD_UpdateFlags[FlagsOffset] != MEMC_UpdateFlags[FlagsOffset]),1);
+      VIDEO_STAT(DisplayBits,1,Available);
+      Updated = 1;
+      /* Process the pixels in this region, stopping at end of row/update block/Vend */
+
+      /* Display will always be a multiple of 2 pixels wide, so we can simplify things a bit compared to 1/2bpp case */
+      const unsigned char *In = RAM+(Vptr>>3);      
+      for(i=0;i<Available;i+=16)
+      {
+        out[0] = out[1] = Palette[*In++];
+        out[2] = out[3] = Palette[*In++];
+        out += 4;
+      }
+    }
+    else
+      out += Available>>2;
+
+    Remaining -= Available;      
+    Vptr += Available;
+    if(Vptr >= Vend)
+      Vptr = Vstart;
+  }
+  DC.Vptr = Vptr;
+        
+  /* If we updated anything, copy over the updated flags (Done last in case the same flags block is encountered multiple times in the same row) */
+  if(Updated)
+  {
+    Vptr = startVptr;
+    Remaining = startRemain;
+    while(Remaining > 0)
+    {
+      unsigned int FlagsOffset = Vptr/(8*UPDATEBLOCKSIZE);
+      int Available = MIN(Remaining,MIN(((FlagsOffset+1)*8*UPDATEBLOCKSIZE)-Vptr,Vend-Vptr));
+  
+      HD_UpdateFlags[FlagsOffset] = MEMC_UpdateFlags[FlagsOffset];
+      
+      Remaining -= Available;      
+      Vptr += Available;
+      if(Vptr >= Vend)
+        Vptr = Vstart;
+    }
+  }
+
+  return Updated;
+}
+
+/*
+
+  Display - Screen output other funcs
+
+*/
+
+static const unsigned int PixelClocks[4] = {8000000,12000000,16000000,24000000};
+
+static void Display_BorderRow(ARMul_State *state,int row)
+{
+  /* Render a border row */
+  HostPixel col = VIDC.BorderCol;
+  if(!DC.ForceRefresh && (HD.BorderCol[row] == col))
+    return;
+  VIDEO_STAT(BorderRedraw,1,1);
+  VIDEO_STAT(BorderRedrawForced,DC.ForceRefresh,1);
+  VIDEO_STAT(BorderRedrawColourChanged,(HD.BorderCol[row] != col),1);
+  HD.BorderCol[row] = col;
+  int hoststart = (row-(VIDC.Vert_DisplayStart+1))*HD.YScale+HD.YOffset;
+  int hostend = hoststart + HD.YScale;
+  if(hoststart < 0)
+    hoststart = 0;
+  if(hostend > HD.Height)
+    hostend = HD.Height;
+  while(hoststart < hostend)
+  {
+    HostPixel *pix = DisplayKbd_GetScanline(state,hoststart++);
+    int i;
+    for(i=0;i<HD.Width;i++)
+      *pix++ = col;
+  }
+}
+
+static const Display_RowFunc RowFuncs[2][4] = {
+ { /* 1X horizontal scaling */
+   Display_RowFunc1bpp1X,
+   Display_RowFunc2bpp1X,
+   Display_RowFunc4bpp1X,
+   Display_RowFunc8bpp1X
+ },
+ { /* 2X horizontal scaling */
+   Display_RowFunc1bpp2X,
+   Display_RowFunc2bpp2X,
+   Display_RowFunc4bpp2X,
+   Display_RowFunc8bpp2X,
+ }
+};
 
 static void Display_DisplayRow(ARMul_State *state,int row)
 {
   /* Render a display row */
-  unsigned int flags = HD.RefreshFlags[row>>5];
-  unsigned int bit = 1<<(row&31);
-  int force = (DC.ForceRefresh || (flags & bit));
-  if(force)
-    HD.RefreshFlags[row>>5] = (flags &~ bit);
-
   int hoststart = (row-(VIDC.Vert_DisplayStart+1))*HD.YScale+HD.YOffset;
   int hostend = hoststart + HD.YScale;
   if(hoststart < 0)
@@ -477,9 +917,15 @@ static void Display_DisplayRow(ARMul_State *state,int row)
     return;
 
   /* Handle border colour updates */
+  int force = DC.ForceRefresh;
+  VIDEO_STAT(DisplayFullForce,force,1);
   HostPixel col = VIDC.BorderCol;
+  
   if(force || (HD.BorderCol[row] != col))
   {
+    VIDEO_STAT(BorderRedraw,1,1);
+    VIDEO_STAT(BorderRedrawForced,force,1);
+    VIDEO_STAT(BorderRedrawColourChanged,(HD.BorderCol[row] != col),1);
     HD.BorderCol[row] = col;
     int i,j;
     for(i=hoststart;i<hostend;i++)
@@ -498,11 +944,21 @@ static void Display_DisplayRow(ARMul_State *state,int row)
 
   /* Display area */
 
+  unsigned int flags = HD.RefreshFlags[row>>5];
+  unsigned int bit = 1<<(row&31);
+  if(flags & bit)
+  {
+    VIDEO_STAT(DisplayRowForce,1,1);
+    force = 1;
+    HD.RefreshFlags[row>>5] = (flags &~ bit);
+  }
+
   /* Process first row, then copy into others if updated. Slow, but easy */
   /* Note: Currently doesn't do anything with HD.XScale! */
   HostPixel *first = DisplayKbd_GetScanline(state,hoststart++) + HD.XOffset;
-  if((RowFuncs[(DC.VIDC_CR&0xc)>>2])(state,row,first,force))
+  if((RowFuncs[HD.XScale-1][(DC.VIDC_CR&0xc)>>2])(state,row,first,force))
   {
+    VIDEO_STAT(DisplayRowRedraw,1,1);
     while(hoststart < hostend)
     {
       HostPixel *next = DisplayKbd_GetScanline(state,hoststart++) + HD.XOffset;
@@ -540,7 +996,6 @@ static void Display_FrameStart(ARMul_State *state,CycleCount nowtime)
 
   /* Calculate new line rate */
   DC.LineRate = ARMul_EmuRate/(PixelClocks[NewCR&3]/(VIDC.Horiz_Cycle*2+2));
-//  printf("LR%d\n",DC.LineRate);
   if(DC.LineRate < 100)
     DC.LineRate = 100; /* Clamp to safe minimum value */
 
@@ -551,10 +1006,12 @@ static void Display_FrameStart(ARMul_State *state,CycleCount nowtime)
   char newDMAEn = (MEMC.ControlReg>>10)&1;
   DC.ForceRefresh = (newDMAEn ^ DC.DMAEn);
   DC.DMAEn = newDMAEn;
+  VIDEO_STAT(ForceRefreshDMA,DC.ForceRefresh,1);
 
   /* Ensure full palette rebuild & screen refresh on BPP change */
   if((DC.VIDC_CR & 0xc) != (NewCR & 0xc))
   {
+    VIDEO_STAT(ForceRefreshBPP,1,1);
     DC.DirtyPalette = 65535;
     DC.ForceRefresh = 1;
   }
@@ -565,6 +1022,7 @@ static void Display_FrameStart(ARMul_State *state,CycleCount nowtime)
     DC.LastVinit = MEMC.Vinit;
     if(!DC.ForceRefresh) /* No point setting RefreshFlags if already doing full refresh */
     {
+      VIDEO_STAT(RefreshFlagsVinit,1,1);
       memset(HD.RefreshFlags,0xff,sizeof(HD.RefreshFlags));
     }
   }
@@ -583,6 +1041,9 @@ static void Display_FrameStart(ARMul_State *state,CycleCount nowtime)
     if((Width != DC.LastHostWidth) || (Height != DC.LastHostHeight) || (FrameRate != DC.LastHostHz))
     {
       printf("New mode: %dx%d, %dHz (CR %x)\n",Width,Height,FrameRate,NewCR);
+#ifdef VIDEO_STATS
+      vidstats_Dump("Stats for previous mode");
+#endif
       /* Try selecting new mode */
       if((Width < 1) || (Height < 1))
       {
@@ -604,6 +1065,11 @@ static void Display_FrameStart(ARMul_State *state,CycleCount nowtime)
     DC.ModeChanged = 0;
   }
 
+#ifdef VIDEO_STATS
+  if(vidstats[vidstat_DisplayFrames] >= 100)
+    vidstats_Dump("Stats for last 100 frames");
+#endif
+
   /* Set up DMA */
   DC.Vptr = MEMC.Vinit<<7;
 
@@ -616,6 +1082,8 @@ static void Display_FrameStart(ARMul_State *state,CycleCount nowtime)
 
 static void Display_FrameEnd(ARMul_State *state,CycleCount nowtime)
 {
+  VIDEO_STAT(DisplayFrames,1,1);
+  
   /* Set up the next frame */
   DC.LastRow = 0;
   DC.NextRow = VIDC.Vert_SyncWidth+1;
@@ -656,6 +1124,7 @@ static void Display_RowStart(ARMul_State *state,CycleCount nowtime)
       Display_Reschedule(state,nowtime,Display_FrameEnd,VIDC.Vert_Cycle+1);
       return;
     }
+    VIDEO_STAT(DisplayRows,1,1);
     row++;
   }
   /* Skip ahead to next row */
@@ -690,6 +1159,7 @@ void VIDC_PutVal(ARMul_State *state,ARMword address, ARMword data,int bNw) {
       VIDC.Palette[Log] = Phy;
       if(!(DC.DirtyPalette & (1<<Log)))
       {
+        VIDEO_STAT(RefreshFlagsPalette,1,1);
         DC.DirtyPalette |= (1<<Log);
         memset(HD.RefreshFlags,0xff,sizeof(HD.RefreshFlags));
       }
