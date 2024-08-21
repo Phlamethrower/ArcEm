@@ -168,6 +168,53 @@ void CopyScreenRAM(ARMul_State *state, unsigned int offset, int len, char *Buffe
 #endif
 }
 
+/* Called using an event queue event - it also sets itself up to be called
+   again.                                                                     */
+
+static void DisplayKbd_Poll(ARMul_State *state,CycleCount time)
+{
+  int KbdSerialVal;
+  static int KbdPollInt = 0;
+  static int discconttog = 0;
+
+  EventQ_RescheduleHead(state,time+POLLGAP,DisplayKbd_Poll);
+
+#ifdef SOUND_SUPPORT
+  sound_poll(state);
+#endif
+
+#ifndef SYSTEM_gp2x
+  /* Our POLLGAP runs at 125 cycles, HDC (and fdc) want callback at 250 */
+  if (discconttog) {
+    FDC_Regular(state);
+    HDC_Regular(state);
+  }
+  discconttog ^= 1;
+#endif
+
+  if ((KbdPollInt++) > 100) {
+    KbdPollInt = 0;
+    /* Call host-specific routine */
+    DisplayKbd_PollHost(state);
+    /* Keyboard check */
+    KbdSerialVal = IOC_ReadKbdTx(state);
+    if (KbdSerialVal != -1) {
+      Kbd_CodeFromHost(state, (unsigned char) KbdSerialVal);
+    } else {
+      if (KBD.TimerIntHasHappened > 2) {
+        KBD.TimerIntHasHappened = 0;
+        if (KBD.KbdState == KbdState_Idle) {
+          Kbd_StartToHost(state);
+        }
+      }
+    }
+  }
+
+  if (--(DC.AutoRefresh) < 0) {
+    RefreshDisplay(state);
+  }
+} /* DisplayKbd_Poll */
+
 void
 DisplayKbd_Init(ARMul_State *state)
 {
@@ -204,56 +251,6 @@ DisplayKbd_Init(ARMul_State *state)
   }
 #endif
 
-  state->Now = ARMul_Time + POLLGAP;
+  /* Schedule update event */
+  EventQ_Insert(state,ARMul_Time+POLLGAP,DisplayKbd_Poll);
 } /* DisplayKbd_Init */
-
-/* Called using an ARM_ScheduleEvent - it also sets itself up to be called
-   again.                                                                     */
-
-unsigned
-DisplayKbd_Poll(void *data)
-{
-  ARMul_State *state = data;
-  int KbdSerialVal;
-  static int KbdPollInt = 0;
-  static int discconttog = 0;
-
-#ifdef SOUND_SUPPORT
-  sound_poll(state);
-#endif
-
-#ifndef SYSTEM_gp2x
-  /* Our POLLGAP runs at 125 cycles, HDC (and fdc) want callback at 250 */
-  if (discconttog) {
-    FDC_Regular(state);
-    HDC_Regular(state);
-  }
-  discconttog ^= 1;
-#endif
-
-  if ((KbdPollInt++) > 100) {
-    KbdPollInt = 0;
-    /* Call host-specific routine */
-    DisplayKbd_PollHost(state);
-    /* Keyboard check */
-    KbdSerialVal = IOC_ReadKbdTx(state);
-    if (KbdSerialVal != -1) {
-      Kbd_CodeFromHost(state, (unsigned char) KbdSerialVal);
-    } else {
-      if (KBD.TimerIntHasHappened > 2) {
-        KBD.TimerIntHasHappened = 0;
-        if (KBD.KbdState == KbdState_Idle) {
-          Kbd_StartToHost(state);
-        }
-      }
-    }
-  }
-
-  if (--(DC.AutoRefresh) < 0) {
-    RefreshDisplay(state);
-  }
-
-  state->Now = ARMul_Time + POLLGAP;
-
-  return 0;
-} /* DisplayKbd_Poll */

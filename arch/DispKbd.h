@@ -159,6 +159,5 @@ void MarkAsUpdated(ARMul_State *state, int end);
 int QueryRamChange(ARMul_State *state, unsigned int offset, int len);
 void CopyScreenRAM(ARMul_State *state, unsigned int offset, int len, char *Buffer);
 void DisplayKbd_Init(ARMul_State *state);
-unsigned DisplayKbd_Poll(void *data);
 
 #endif

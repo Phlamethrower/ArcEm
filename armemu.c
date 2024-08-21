@@ -144,19 +144,6 @@ ARMul_LoadInstrTriplet(ARMul_State *state,ARMword addr,PipelineEntry *p)
   }
 }
 
-/***************************************************************************\
-* This routine is called at the beginning of every cycle, to invoke         *
-* scheduled events.                                                         *
-\***************************************************************************/
-
-static void ARMul_InvokeEvent(ARMul_State *state)
-{
-  if (state->Now < ARMul_Time) {
-    DisplayKbd_Poll(state);
-  }
-}
-
-
 void ARMul_Icycles(ARMul_State *state,unsigned number)
 {
   state->NumCycles += number;
@@ -1107,28 +1094,28 @@ ARMul_Emulate26(ARMul_State *state)
       }
       Prof_End("Fetch/decode");
 
-      Prof_BeginFunc(ARMul_InvokeEvent);
-      ARMul_InvokeEvent(state);
-      Prof_EndFunc(ARMul_InvokeEvent);
-
-      if (ARMul_Time >= ioc.NextTimerTrigger)
+      CycleCount local_time = ARMul_Time;
+      while(((CycleDiff) (local_time-state->EventQ[0].Time)) >= 0)
       {
-        Prof_BeginFunc(UpdateTimerRegisters);
-        UpdateTimerRegisters(state);
-        Prof_EndFunc(UpdateTimerRegisters);
+        EventQ_Func func = state->EventQ[0].Func;
+        Prof_BeginFunc(func);
+        (func)(state,local_time);
+        Prof_EndFunc(func);
       }
 
       if (state->Exception) { /* Any exceptions */
-        Prof_BeginFunc(ARMul_Abort);
         if ((state->Exception & 2) && !FFLAG) {
+          Prof_BeginFunc(ARMul_Abort);
           ARMul_Abort(state, ARMul_FIQV);
+          Prof_EndFunc(ARMul_Abort);
           break;
 
         } else if ((state->Exception & 1) && !IFLAG) {
+          Prof_BeginFunc(ARMul_Abort);
           ARMul_Abort(state, ARMul_IRQV);
+          Prof_EndFunc(ARMul_Abort);
           break;
         }
-        Prof_EndFunc(ARMul_Abort);
       }
 
       ARMword instr = pipe[pipeidx].instr;
@@ -1172,30 +1159,30 @@ ARMul_Emulate26(ARMul_State *state)
       }
       Prof_End("Fetch/decode");
 
-      Prof_BeginFunc(ARMul_InvokeEvent);
-      ARMul_InvokeEvent(state);
-      Prof_EndFunc(ARMul_InvokeEvent);
-
-      if (ARMul_Time >= ioc.NextTimerTrigger)
+      CycleCount local_time = ARMul_Time;
+      while(((CycleDiff) (local_time-state->EventQ[0].Time)) >= 0)
       {
-        Prof_BeginFunc(UpdateTimerRegisters);
-        UpdateTimerRegisters(state);
-        Prof_EndFunc(UpdateTimerRegisters);
+        EventQ_Func func = state->EventQ[0].Func;
+        Prof_BeginFunc(func);
+        (func)(state,local_time);
+        Prof_EndFunc(func);
       }
 
       if (state->Exception) { /* Any exceptions */
-        Prof_BeginFunc(ARMul_Abort);
         if ((state->Exception & 2) && !FFLAG) {
+          Prof_BeginFunc(ARMul_Abort);
           ARMul_Abort(state, ARMul_FIQV);
+          Prof_EndFunc(ARMul_Abort);
           pipeidx = 1;
           break;
 
         } else if ((state->Exception & 1) && !IFLAG) {
+          Prof_BeginFunc(ARMul_Abort);
           ARMul_Abort(state, ARMul_IRQV);
+          Prof_EndFunc(ARMul_Abort);
           pipeidx = 1;
           break;
         }
-        Prof_EndFunc(ARMul_Abort);
       }
 
       ARMword instr = pipe[1].instr;
@@ -1238,30 +1225,30 @@ ARMul_Emulate26(ARMul_State *state)
       }
       Prof_End("Fetch/decode");
 
-      Prof_BeginFunc(ARMul_InvokeEvent);
-      ARMul_InvokeEvent(state);
-      Prof_EndFunc(ARMul_InvokeEvent);
-
-      if (ARMul_Time >= ioc.NextTimerTrigger)
+      local_time = ARMul_Time;
+      while(((CycleDiff) (local_time-state->EventQ[0].Time)) >= 0)
       {
-        Prof_BeginFunc(UpdateTimerRegisters);
-        UpdateTimerRegisters(state);
-        Prof_EndFunc(UpdateTimerRegisters);
+        EventQ_Func func = state->EventQ[0].Func;
+        Prof_BeginFunc(func);
+        (func)(state,local_time);
+        Prof_EndFunc(func);
       }
 
       if (state->Exception) { /* Any exceptions */
-        Prof_BeginFunc(ARMul_Abort);
         if ((state->Exception & 2) && !FFLAG) {
+          Prof_BeginFunc(ARMul_Abort);
           ARMul_Abort(state, ARMul_FIQV);
           pipeidx = 2;
+          Prof_EndFunc(ARMul_Abort);
           break;
 
         } else if ((state->Exception & 1) && !IFLAG) {
+          Prof_BeginFunc(ARMul_Abort);
           ARMul_Abort(state, ARMul_IRQV);
+          Prof_EndFunc(ARMul_Abort);
           pipeidx = 2;
           break;
         }
-        Prof_EndFunc(ARMul_Abort);
       }
 
       instr = pipe[2].instr;
@@ -1313,30 +1300,30 @@ ARMul_Emulate26(ARMul_State *state)
       }
       Prof_End("Fetch/decode");
 
-      Prof_BeginFunc(ARMul_InvokeEvent);
-      ARMul_InvokeEvent(state);
-      Prof_EndFunc(ARMul_InvokeEvent);
-
-      if (ARMul_Time >= ioc.NextTimerTrigger)
+      local_time = ARMul_Time;
+      while(((CycleDiff) (local_time-state->EventQ[0].Time)) >= 0)
       {
-        Prof_BeginFunc(UpdateTimerRegisters);
-        UpdateTimerRegisters(state);
-        Prof_EndFunc(UpdateTimerRegisters);
+        EventQ_Func func = state->EventQ[0].Func;
+        Prof_BeginFunc(func);
+        (func)(state,local_time);
+        Prof_EndFunc(func);
       }
 
       if (state->Exception) { /* Any exceptions */
-        Prof_BeginFunc(ARMul_Abort);
         if ((state->Exception & 2) && !FFLAG) {
+          Prof_BeginFunc(ARMul_Abort);
           ARMul_Abort(state, ARMul_FIQV);
+          Prof_EndFunc(ARMul_Abort);
           pipeidx = 0;
           break;
 
         } else if ((state->Exception & 1) && !IFLAG) {
+          Prof_BeginFunc(ARMul_Abort);
           ARMul_Abort(state, ARMul_IRQV);
+          Prof_EndFunc(ARMul_Abort);
           pipeidx = 0;
           break;
         }
-        Prof_EndFunc(ARMul_Abort);
       }
 
       instr = pipe[0].instr;

@@ -80,14 +80,14 @@ INSTALL=cp
 # Everything else should be ok as it is.
 
 OBJS = armcopro.o armemu.o arminit.o \
-	armsupp.o main.o dagstandalone.o \
+	armsupp.o main.o dagstandalone.o eventq.o \
 		$(SYSTEM)/DispKbd.o arch/i2c.o arch/archio.o \
     arch/fdc1772.o $(SYSTEM)/ControlPane.o arch/hdc63463.o arch/ReadConfig.o \
     arch/keyboard.o $(SYSTEM)/filecalls.o arch/DispKbdShared.o \
     arch/ArcemConfig.o arch/cp15.o
 
 SRCS = armcopro.c armemu.c arminit.c arch/armarc.c \
-	armsupp.c main.c dagstandalone.c  \
+	armsupp.c main.c dagstandalone.c eventq.c \
 	arm-support.s conditions.s rhs.s \
 	$(SYSTEM)/DispKbd.c arch/i2c.c arch/archio.c \
 	arch/fdc1772.c $(SYSTEM)/ControlPane.c arch/hdc63463.c \
@@ -137,13 +137,13 @@ ifeq (${SYSTEM},riscos-single)
 EXTNROM_SUPPORT=notyet
 DIRECT_DISPLAY=yes
 CFLAGS += -I@ -DSYSTEM_riscos_single -Iriscos-single -mtune=xscale -march=armv5te -mthrowback
+LDFLAGS += -static
 # Disable stack limit checks. -ffixed-sl required to prevent sl being used as temp storage, breaking unixlib and any other code that does do stack checks
 CFLAGS += -mno-apcs-stack-check -ffixed-sl
 # No function name poking for a bit extra speed
 CFLAGS += -mno-poke-function-name
 # Debug options
-CFLAGS += -save-temps # -mpoke-function-name
-LDFLAGS += -static
+CFLAGS += -save-temps -mpoke-function-name
 #OBJS += arm-support.o rhs.o
 OBJS += prof.o
 TARGET=!ArcEm/arcem
@@ -278,6 +278,9 @@ dagstandalone.o: dagstandalone.c armdefs.h
 	$(CC) $(CFLAGS) -c $*.c
 
 main.o: main.c armdefs.h
+	$(CC) $(CFLAGS) -c $*.c
+
+eventq.o: eventq.c eventq.h
 	$(CC) $(CFLAGS) -c $*.c
 
 $(SYSTEM)/DispKbd.o: $(SYSTEM)/DispKbd.c arch/DispKbd.h $(SYSTEM)/KeyTable.h \
