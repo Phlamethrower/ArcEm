@@ -625,7 +625,7 @@ static void Host_PollDisplay_Common(ARMul_State *state,const DisplayParams *para
       
       const float scale = ((float)CLOCKS_PER_SEC)/1000000.0f;
       float mhz = scale*((float)(ARMul_Time-oldcycles))/((float)(nowtime2-oldtime));
-      printf("\x1e%.2fMHz %dx%d %dHz %dbpp %d:%d %dfps %d   \n",mhz,(VIDC.Horiz_DisplayEnd-VIDC.Horiz_DisplayStart)*2,VIDC.Vert_DisplayEnd-VIDC.Vert_DisplayStart,current_hz,1<<((VIDC.ControlReg>>2)&3),params->XScale,params->YScale,fps,PDD_FrameSkip);
+      printf("\x1e%.2fMHz %dx%d %dHz %dbpp %d:%d %dfps   \n",mhz,(VIDC.Horiz_DisplayEnd-VIDC.Horiz_DisplayStart)*2,VIDC.Vert_DisplayEnd-VIDC.Vert_DisplayStart,current_hz,1<<((VIDC.ControlReg>>2)&3),params->XScale,params->YScale,fps);
       oldcycles = ARMul_Time;
       oldtime = nowtime2;
       fps = 0;
