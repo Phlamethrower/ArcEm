@@ -2,8 +2,6 @@
    Hacked about with for new display driver interface by Jeffrey Lee, 2011 */
 /* Display and keyboard interface for the Arc emulator */
 
-/*#define DEBUG_VIDCREGS*/
-
 #include <stdio.h>
 #include <limits.h>
 #include <time.h>
@@ -225,6 +223,8 @@ SDD_Name(Host_PollDisplay)(ARMul_State *state)
 /* Palettised display code */
 #define PDD_Name(x) pdd_##x
 
+static int BorderPalEntry;
+
 static void PDD_Name(Host_ChangeMode)(ARMul_State *state,int width,int height,int depth,int hz);
 
 static void PDD_Name(Host_SetPaletteEntry)(ARMul_State *state,int i,unsigned int phys)
@@ -236,6 +236,25 @@ static void PDD_Name(Host_SetPaletteEntry)(ARMul_State *state,int i,unsigned int
   buf[3] = ((phys>>4) & 0xf)*0x11;
   buf[4] = ((phys>>8) & 0xf)*0x11;
   _swix(OS_Word,_INR(0,1),12,buf);
+}
+
+static void PDD_Name(Host_SetBorderColour)(ARMul_State *state,unsigned int phys)
+{
+  char buf[5];
+  /* Set real border */
+  buf[0] = 0;
+  buf[1] = 24;
+  buf[2] = (phys & 0xf)*0x11;
+  buf[3] = ((phys>>4) & 0xf)*0x11;
+  buf[4] = ((phys>>8) & 0xf)*0x11;
+  _swix(OS_Word,_INR(0,1),12,buf);
+  /* Set border palette entry */
+  if(BorderPalEntry != 256)
+  {
+    buf[0] = BorderPalEntry;
+    buf[1] = 16;
+    _swix(OS_Word,_INR(0,1),12,buf);
+  }
 }
 
 static inline ARMword *PDD_Name(Host_GetRow)(ARMul_State *state,int row,int offset,int *outoffset)
@@ -250,6 +269,19 @@ static inline ARMword *PDD_Name(Host_GetRow)(ARMul_State *state,int row,int offs
 
 static void
 PDD_Name(Host_PollDisplay)(ARMul_State *state);
+
+static void PDD_Name(Host_DrawBorderRect)(ARMul_State *state,int x,int y,int width,int height)
+{
+  /* Quickest way is likely to be to OS_Plot */
+  y = ModeVarsOut[MODE_VAR_HEIGHT]+1-(y+height);
+  x = x<<ModeVarsOut[MODE_VAR_XEIG];
+  y = y<<ModeVarsOut[MODE_VAR_YEIG];
+  width = width<<ModeVarsOut[MODE_VAR_XEIG];
+  height = height<<ModeVarsOut[MODE_VAR_YEIG];
+
+  _swi(OS_Plot,_INR(0,2),4,x,y);
+  _swi(OS_Plot,_INR(0,2),96+1,width,height);
+}
 
 #include "../arch/paldisplaydev.c"
 
@@ -269,6 +301,16 @@ void PDD_Name(Host_ChangeMode)(ARMul_State *state,int width,int height,int depth
   
   HD.Width = ModeVarsOut[MODE_VAR_WIDTH]+1; /* Should match mode->w, mode->h, but use these just to make sure */
   HD.Height = ModeVarsOut[MODE_VAR_HEIGHT]+1;
+  if(realdepth > depth)
+  {
+    /* We have enough palette entries to have a border */
+    BorderPalEntry = 1<<(1<<depth);
+  }
+  else
+  {
+    /* Disable border entry */
+    BorderPalEntry = 256;
+  }
 
   /* Calculate expansion params */
   if((realdepth == depth) && (HD.XScale == 1))
@@ -296,8 +338,11 @@ void PDD_Name(Host_ChangeMode)(ARMul_State *state,int width,int height,int depth
   
   fprintf(stderr,"Emu mode %dx%dx%d aspect %.1f mapped to real mode %dx%dx%d aspect %.1f, with scale factors %dx%d\n",width,height,depth,((float)aspect)/2.0f,mode->w,mode->h,realdepth,((float)mode->aspect)/2.0f,HD.XScale,HD.YScale);
 
+  /* Set correct graphics colour for border */
+  _swi(ColourTrans_SetColour,_IN(0)|_INR(3,4),BorderPalEntry&255,0,0);
+
   /* Screen is expected to be cleared */
-  _swi(OS_WriteC,_IN(0),12);
+  PDD_Name(Host_DrawBorderRect)(state,0,0,HD.Width,HD.Height);
 }
 
 static void
@@ -484,6 +529,16 @@ static void Host_PollDisplay_Common(ARMul_State *state,const DisplayParams *para
 
     if((nowtime2-oldtime) > CLOCKS_PER_SEC)
     {
+      if(ModeVarsOut[MODE_VAR_LOG2BPP] < 4)
+      {
+        /* Try and select sensible text colours
+           Unfortunately ColourTrans doesn't always get it right, even though
+           we invalidate the cache each time. */
+        _swi(ColourTrans_InvalidateCache,0);
+        _swi(ColourTrans_SetTextColour,_IN(0)|_IN(3),0xffffff00,0);
+        _swi(ColourTrans_SetTextColour,_IN(0)|_IN(3),0,128);
+      }
+      
       const float scale = ((float)CLOCKS_PER_SEC)/1000000.0f;
       float mhz = scale*((float)(ARMul_Time-oldcycles))/((float)(nowtime2-oldtime));
       printf("\x1e%.2fMHz %dx%d %dbpp %d:%d %dfps   \n",mhz,(VIDC.Horiz_DisplayEnd-VIDC.Horiz_DisplayStart)*2,VIDC.Vert_DisplayEnd-VIDC.Vert_DisplayStart,1<<((VIDC.ControlReg>>2)&3),params->XScale,params->YScale,fps);

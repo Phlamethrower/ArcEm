@@ -126,286 +126,8 @@ struct PDD_Name(DisplayInfo) {
 };
 
 #define ROWFUNC_FORCE 0x1 /* Force row to be fully redrawn */
-
-#define ROWFUNC_UPDATED 0x2 /* Flag used internally by rowfuncs to indicate whether anything was done */
-
-/*
-
-  Routine to copy a bitstream from one bit-aligned location to another
-
-  dest & src pointers must be ARMword aligned
-  destalign & srcalign must be 0 <= x < 32
-  count is in bits
-
-*/
-
-static void BitCopy(ARMword *dest,int destalign,const ARMword *src,int srcalign,int count)
-{
-  /* Get the destination word aligned */
-  int invdestalign = 32-destalign;
-  int invsrcalign = 32-srcalign;
-  ARMword tempsrc1 = *src++;
-  ARMword tempsrc2 = *src++;
-  if(destalign)
-  {
-    ARMword tempdest = *dest;
-
-    ARMword mask = (count<=invdestalign?(1<<count):0)-1;
-    mask = mask<<destalign;
-    tempdest &= ~mask;
-    ARMword tempsrc3 = (tempsrc1>>srcalign);
-    if(srcalign)
-      tempsrc3 |= (tempsrc2<<invsrcalign);
-    tempdest |= (tempsrc1<<destalign) & mask;
-    *dest++ = tempdest;
-
-    count -= invdestalign;
-    
-    if(count <= 0)
-    {
-      /* Nothing else to copy */
-      return;
-    }
-
-    srcalign += invdestalign;
-    if(srcalign >= 32)
-    {
-      tempsrc1 = tempsrc2;
-      tempsrc2 = *src++;
-      srcalign &= 0x1f;
-    }
-    invsrcalign = 32-srcalign;
-  }
-  if(!srcalign && (count>64)) /* TODO - Tweak this value */
-  {
-    /* Matching alignment, memcpy up to the end */
-    int temp = count>>5;
-    memcpy(dest,src-2,temp<<2);
-    dest += temp;
-    tempsrc1 = src[temp-2];
-    count &= 0x1f;
-  }
-  else while(count >= 32)
-  {
-    *dest++ = (tempsrc1>>srcalign) | (tempsrc2<<invsrcalign);
-    tempsrc1 = tempsrc2;
-    tempsrc2 = *src++;
-    count -= 32;
-  }
-  if(count)
-  {
-    /* End bits */
-    ARMword tempdest = *dest;
-    ARMword mask = 0xffffffff<<count;
-    tempdest &= mask;
-    tempsrc1 = (tempsrc1>>srcalign);
-    if(srcalign)
-      tempsrc1 |= (tempsrc2<<invsrcalign);
-    tempdest |= tempsrc1 &~ mask;
-    *dest = tempdest;
-  }
-}
-
-/*
-
-  Routine to generate lookup tables for fast upscaling/expansion
-
-  dest = destination buffer, must be appropriate size
-  srcbpp = src BPP (1,2,4,8)
-  factor = log2 of how much bigger each dest pixel is (1 <= factor <= log2(32/srcbpp))
-  mul = multiplier (0x1 for simple BPP conversion, 0x11 for 4-bit 2X upscale, etc.)
-
-*/
-
-static void GenExpandTable(ARMword *dest,unsigned int srcbpp,unsigned int factor,unsigned int mul)
-{
-  unsigned int destbpp = srcbpp<<factor;
-  unsigned int pixels = 1;
-  while((destbpp*pixels < 32) && (srcbpp*pixels < 8))
-    pixels <<= 1;
-  unsigned int srcbits = 1<<(srcbpp*pixels);
-  ARMword i,j;
-  for(i=0;i<srcbits;i++)
-  {
-    ARMword out = 0;
-    for(j=0;j<pixels;j++)
-    {
-      ARMword pixel = (i>>(j*srcbpp)) & ((1<<srcbpp)-1);
-      pixel = pixel*mul;
-      out |= pixel<<(j*destbpp);
-    }
-    *dest++ = out;
-  }
-}
-
-/*
-
-  Return size (entry count) for expand table
-
-*/
-
-static int GetExpandTableSize(unsigned int srcbpp,unsigned int factor)
-{
-  /* Work out how many source pixels we can lookup before we reach:
-     (a) 32 output bits
-     or
-     (b) 256 table entries
-  */
-  unsigned int destbpp = srcbpp<<factor;
-  unsigned int pixels = 1;
-  while((destbpp*pixels < 32) && (srcbpp*pixels < 8))
-    pixels <<= 1; /* Should only need to consider powers of two */
-  unsigned int srcbits = 1<<(srcbpp*pixels);
-  return srcbits;
-}
-
-/*
-
-  Routine to copy a bitstream from one bit-aligned location to another, while
-  expanding the data via a lookup table
-
-  dest & src pointers must be ARMword aligned
-  destalign & srcalign must be 0 <= x < 32
-  count = available source data, in bits, multiple of srcbpp
-  srcbpp = src BPP (1,2,4,8)
-  factor = log2 of how much bigger each dest pixel is (1 <= factor <= log2(32/srcbpp))
-  destalign must be multiple of srcbpp<<factor
-*/
-
-static void BitCopyExpand(ARMword *dest,int destalign,const ARMword *src,int srcalign,int count,const ARMword *expandtable,unsigned int srcbpp,unsigned int factor)
-{
-  unsigned int destbpp = srcbpp<<factor;
-  unsigned int pixels = 1;
-  while((destbpp*pixels < 32) && (srcbpp*pixels < 8))
-    pixels <<= 1;
-  unsigned int srcbits = srcbpp*pixels;
-  unsigned int destbits = destbpp*pixels;
-  ARMword srcmask = (1<<srcbits)-1;
-  /* Get the destination word aligned */
-  int invdestalign = 32-destalign;
-  int invsrcalign = 32-srcalign;
-  ARMword tempsrc1 = *src++;
-  ARMword tempsrc2 = *src++;
-  if(destalign)
-  {
-    ARMword tempdest = *dest;
-    ARMword destmask = (count<=invdestalign?(1<<count):0)-1;
-    destmask = destmask<<destalign;
-    tempdest &= ~destmask;
-    ARMword tempsrc3 = (tempsrc1>>srcalign);
-    if(srcalign)
-      tempsrc3 |= (tempsrc2<<invsrcalign);
-    while(destalign < 32)
-    {
-      ARMword in = expandtable[tempsrc3 & ((1<<srcbpp)-1)]; /* One pixel at a time for simplicity */
-      tempdest |= in<<destalign;
-      srcalign += srcbpp;
-      destalign += destbpp;
-      tempsrc3 >>= srcbpp;
-      count -= srcbpp;
-    }
-    *dest++ = tempdest;
-    if(srcalign >= 32)
-    {
-      srcalign &= 0x1f;
-      tempsrc1 = tempsrc2;
-      tempsrc2 = *src++;
-    }
-    invsrcalign = 32-srcalign;
-  }
-  if(destbits < 32)
-  {
-    /* Table isn't big enough for us to get one full word per entry */
-    ARMword tempsrc3 = (tempsrc1>>srcalign);
-    if(srcalign)
-      tempsrc3 |= (tempsrc2<<invsrcalign);
-    int remaining = 32;
-    ARMword tempdest = 0;
-    int outshift = 0;
-    /* There will be (count<<factor)>>5 full words available, and we want to stop when there's less than one full word left */
-    int bitsleft = (count<<factor)&0x1f; 
-    while(count > bitsleft)
-    {
-      tempdest |= expandtable[tempsrc3 & srcmask]<<outshift;
-      outshift += destbits;
-      if(outshift >= 32)
-      {
-        *dest++ = tempdest;
-        tempdest = 0;
-        outshift = 0;
-      }
-      tempsrc3 >>= srcbits;
-      remaining -= srcbits;
-      count -= srcbits;
-      srcalign += srcbits;
-      if(!remaining)
-      {
-        if(srcalign >= 32)
-        {
-          srcalign &= 0x1f;
-          tempsrc1 = tempsrc2;
-          tempsrc2 = *src++;
-        }
-        invsrcalign = 32-srcalign;
-        tempsrc3 = (tempsrc1>>srcalign);
-        if(srcalign)
-          tempsrc3 |= (tempsrc2<<invsrcalign);
-        remaining = 32;
-      }
-    }
-  }
-  else
-  {
-    /* One output word for every srcbits */
-    ARMword tempsrc3 = (tempsrc1>>srcalign);
-    if(srcalign)
-      tempsrc3 |= (tempsrc2<<invsrcalign);
-    int remaining = 32;
-    while(count >= srcbits)
-    {
-      *dest++ = expandtable[tempsrc3 & srcmask];
-      tempsrc3 >>= srcbits;
-      remaining -= srcbits;
-      count -= srcbits;
-      srcalign += srcbits;
-      if(!remaining)
-      {
-        if(srcalign >= 32)
-        {
-          srcalign &= 0x1f;
-          tempsrc1 = tempsrc2;
-          tempsrc2 = *src++;
-        }
-        invsrcalign = 32-srcalign;
-        tempsrc3 = (tempsrc1>>srcalign);
-        if(srcalign)
-          tempsrc3 |= (tempsrc2<<invsrcalign);
-        remaining = 32;
-      }
-    }
-  }
-  if(count)
-  {
-    /* End bits */
-    ARMword tempdest = *dest;
-    ARMword destmask = 0xffffffff<<(count<<factor);
-    tempdest &= destmask;
-    ARMword tempsrc3 = (tempsrc1>>srcalign);
-    if(srcalign)
-      tempsrc3 |= (tempsrc2<<invsrcalign);
-    int outshift = 0;
-    while(count)
-    {    
-      ARMword in = expandtable[tempsrc3 & ((1<<srcbpp)-1)]; /* One pixel at a time for simplicity */
-      tempdest |= in<<outshift;
-      srcalign += srcbpp;
-      outshift += destbpp;
-      tempsrc3 >>= srcbpp;
-      count -= srcbpp;
-    }
-    *dest = tempdest;
-  }
-}
+#define ROWFUNC_UPDATED 0x2 /* Flag used to indicate whether anything was done */
+#define ROWFUNC_UNALIGNED 0x4 /* Flag that gets set if we know we can't use the byte-aligned rowfuncs */
 
 /*
 
@@ -453,13 +175,14 @@ static inline int PDD_Name(RowFunc1XSameBitAligned)(ARMul_State *state,ARMword *
   return (flags & ROWFUNC_UPDATED);
 }
 
-static inline int PDD_Name(RowFunc1XSameByteAligned)(ARMul_State *state,char *out,int flags)
+static inline int PDD_Name(RowFunc1XSameByteAligned)(ARMul_State *state,ARMword *outwords,int outoffset,int flags)
 {
   unsigned int Vptr = DC.Vptr>>3;
   unsigned int Vstart = MEMC.Vstart<<4;
   unsigned int Vend = (MEMC.Vend+1)<<4; /* Point to pixel after end */
   const char *RAM = (char *) MEMC.PhysRam;
   int Remaining = DC.BitWidth>>3;
+  char *out = ((char *)outwords)+(outoffset>>3);
 
   /* Sanity checks to avoid looping forever */
   if((Vptr >= Vend) || (Vstart >= Vend))
@@ -575,7 +298,8 @@ static void PDD_Name(EventFunc)(ARMul_State *state,CycleCount nowtime)
 
   /* Force full refresh if DMA just toggled on/off */
   char newDMAEn = (MEMC.ControlReg>>10)&1;
-  DC.ForceRefresh |= (newDMAEn ^ DC.DMAEn);
+  int DMAToggle = (newDMAEn ^ DC.DMAEn);
+  DC.ForceRefresh |= DMAToggle;
   DC.DMAEn = newDMAEn;
 
   /* Ensure full palette rebuild on BPP change */
@@ -632,9 +356,15 @@ static void PDD_Name(EventFunc)(ARMul_State *state,CycleCount nowtime)
       DC.ForceRefresh = 1;
     }
     DC.ModeChanged = 0;
+    DC.DirtyPalette = -1;
   }
 
   /* Update host palette */
+  if(DC.DirtyPalette & 0x10000)
+  {
+    PDD_Name(Host_SetBorderColour)(state,VIDC.BorderCol);
+    DC.DirtyPalette -= 0x10000;
+  }
   if(DC.DirtyPalette)
   {
     int i;
@@ -676,51 +406,66 @@ static void PDD_Name(EventFunc)(ARMul_State *state,CycleCount nowtime)
   DC.Vptr = MEMC.Vinit<<7;
 
   /* Render */
-  int i;
-  int flags = (DC.ForceRefresh?ROWFUNC_FORCE:0);
-  for(i=0;i<Height;i++)
+  if(newDMAEn)
   {
-    int hoststart = i*HD.YScale+HD.YOffset;
-    int hostend = hoststart+HD.YScale;
-    if(hoststart < 0)
-      hoststart = 0;
-    if(hostend > HD.Height)
-      hostend = HD.Height;
-    ARMword Vptr = DC.Vptr;
-    while(hoststart < hostend)
+    int i;
+    int flags = (DC.ForceRefresh?ROWFUNC_FORCE:0);
+
+    /* We can test these values once here, so that it's only outoffset alignment
+       that we need to worry about during the loop */
+    if((DC.Vptr & 0x7) || ((Width*BPP)&0x7))
+      flags |= ROWFUNC_UNALIGNED;
+
+    for(i=0;i<Height;i++)
     {
-      DC.Vptr = Vptr;
-      int outoffset;
-      int updated;
-      ARMword *out = PDD_Name(Host_GetRow)(state,hoststart++,HD.XOffset,&outoffset);
-      if(HD.ExpandTable)
+      int hoststart = i*HD.YScale+HD.YOffset;
+      int hostend = hoststart+HD.YScale;
+      if(hoststart < 0)
+        hoststart = 0;
+      if(hostend > HD.Height)
+        hostend = HD.Height;
+      ARMword Vptr = DC.Vptr;
+      while(hoststart < hostend)
       {
-        updated = PDD_Name(RowFuncExpandTable)(state,out,outoffset,flags);
+        DC.Vptr = Vptr;
+        int outoffset;
+        int updated;
+        ARMword *out = PDD_Name(Host_GetRow)(state,hoststart++,HD.XOffset,&outoffset);
+        if(HD.ExpandTable)
+        {
+          updated = PDD_Name(RowFuncExpandTable)(state,out,outoffset,flags);
+        }
+        else if(!(flags & ROWFUNC_UNALIGNED) && !(outoffset & 0x7))
+        {
+          updated = PDD_Name(RowFunc1XSameByteAligned)(state,out,outoffset,flags);
+        }
+        else
+        {
+          updated = PDD_Name(RowFunc1XSameBitAligned)(state,out,outoffset,flags);
+        }
+        if(updated)
+          flags |= ROWFUNC_UPDATED;
+        else
+          break;
       }
-      else if(!(outoffset & 0x7) && !(Vptr & 0x7) && !((Width<<BPP) & 0x7))
-      {
-        updated = PDD_Name(RowFunc1XSameByteAligned)(state,((char *) out)+(outoffset>>3),flags);
-      }
-      else
-      {
-        updated = PDD_Name(RowFunc1XSameBitAligned)(state,out,outoffset,flags);
-      }
-      if(updated)
-        flags |= ROWFUNC_UPDATED;
-      else
-        break;
     }
+  
+    /* Update UpdateFlags */
+    if(flags & ROWFUNC_UPDATED)
+    {
+      /* Only need to update between MIN(Vinit,Vstart) and Vend */
+      int start = MIN(MEMC.Vinit,MEMC.Vstart)/(UPDATEBLOCKSIZE/16);
+      int end = (MEMC.Vend/(UPDATEBLOCKSIZE/16))+1;
+      memcpy(HD.UpdateFlags+start,MEMC.UpdateFlags+start,(end-start)*sizeof(unsigned int));
+    }  
+  }
+  else if(DMAToggle)
+  {
+    /* DMA just turned off, fill screen with border colour */
+    /* TODO - Cope with other situations, e.g. changes in display area size */
+    PDD_Name(Host_DrawBorderRect)(state,HD.XOffset,HD.YOffset,Width*HD.XScale,Height*HD.YScale);
   }
   DC.ForceRefresh = 0;
-
-  /* Update UpdateFlags */
-  if(flags & ROWFUNC_UPDATED)
-  {
-    /* Only need to update between MIN(Vinit,Vstart) and Vend */
-    int start = MIN(MEMC.Vinit,MEMC.Vstart)/(UPDATEBLOCKSIZE/16);
-    int end = (MEMC.Vend/(UPDATEBLOCKSIZE/16))+1;
-    memcpy(HD.UpdateFlags+start,MEMC.UpdateFlags+start,(end-start)*sizeof(unsigned int));
-  }  
 
   /* Update host */
   PDD_Name(Host_PollDisplay)(state);
@@ -764,7 +509,7 @@ static void PDD_Name(VIDCPutVal)(ARMul_State *state,ARMword address, ARMword dat
       if(VIDC.BorderCol != val)
       {
         VIDC.BorderCol = val;
-//        HD.BorderCol = SDD_Name(Host_GetColour)(state,val);
+        DC.DirtyPalette |= 0x10000;
       }
       break;
 
