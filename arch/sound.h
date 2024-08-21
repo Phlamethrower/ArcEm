@@ -4,9 +4,10 @@
 /* TODO Needs to be made 16 bit on any platform. */
 typedef unsigned short int SoundData;
 
-extern int Sound_BatchSize; /* How many DMA fetches to attempt to do at once */
+extern int Sound_BatchSize; /* How many 16*2 sample batches to attempt to deliver to the platform code at once */
 extern unsigned long Sound_DMARate; /* How many cycles between DMA fetches */
 extern int Sound_FudgeRate; /* Extra fudge factor applied to Sound_DMARate */
+extern unsigned long Sound_MaxDesiredRate; /* Maximum sample rate the platform code is happy to deal with. Specified in units of 1/1024Hz */
 
 typedef enum {
   Stereo_LeftRight, /* Data is ordered with left channel first */

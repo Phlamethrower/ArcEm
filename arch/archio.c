@@ -21,6 +21,7 @@
 #endif
 #include "keyboard.h"
 #include "displaydev.h"
+#include "sound.h"
 
 /*#define IOC_TRACE*/
 
@@ -173,7 +174,7 @@ static void UpdateTimerRegisters_Internal(ARMul_State *state,CycleCount nowtime,
   /* ----------------------------------------------------------------- */
   tmpL = ioc.TimerInputLatch[0];
   if (tmpL == 0) tmpL = 1;
-  if (ioc.TimerCount[0] <= scaledTimeSlip) {
+  if (ioc.TimerCount[0] < scaledTimeSlip) {
     KBD.TimerIntHasHappened++;
     ioc.IRQStatus |= IRQA_TM0;
     IO_UpdateNirq(state);
@@ -183,14 +184,14 @@ static void UpdateTimerRegisters_Internal(ARMul_State *state,CycleCount nowtime,
   if (ioc.TimerCount[0] < 0) ioc.TimerCount[0] += tmpL;
 
   if (ioc.Timer0CanInt) {
-    tmpL = (((unsigned long long) ioc.TimerCount[0]) * ioc.InvIOCRate) >> 16;
+    tmpL = (((unsigned long long) (ioc.TimerCount[0]+1)) * ioc.InvIOCRate) >> 16;
     if (tmpL < nextTrigger) nextTrigger = tmpL;
   }
 
   /* ----------------------------------------------------------------- */
   tmpL = ioc.TimerInputLatch[1];
   if (tmpL == 0) tmpL = 1;
-  if (ioc.TimerCount[1] <= scaledTimeSlip) {
+  if (ioc.TimerCount[1] < scaledTimeSlip) {
     ioc.IRQStatus |= IRQA_TM1;
     IO_UpdateNirq(state);
     ioc.Timer1CanInt = 0; /* Because its just caused one which hasn't cleared yet */
@@ -199,7 +200,7 @@ static void UpdateTimerRegisters_Internal(ARMul_State *state,CycleCount nowtime,
   if (ioc.TimerCount[1] < 0) ioc.TimerCount[1] += tmpL;
 
   if (ioc.Timer1CanInt) {
-    tmpL = (((unsigned long long) ioc.TimerCount[1]) * ioc.InvIOCRate) >> 16;
+    tmpL = (((unsigned long long) (ioc.TimerCount[1]+1)) * ioc.InvIOCRate) >> 16;
     if (tmpL < nextTrigger) nextTrigger = tmpL;
   }
 
@@ -649,6 +650,9 @@ PutValIO(ARMul_State *state, ARMword address, ARMword data, int byteNotword)
             {
               ioc.IOEBControlReg = data;
               (DisplayDev_Current->IOEBCRWrite)(state,data);
+#ifdef SOUND_SUPPORT
+              Sound_SoundFreqUpdated(state);
+#endif
             }
             break;
 

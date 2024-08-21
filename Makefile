@@ -139,9 +139,9 @@ LDFLAGS += -static
 # avoid things like HostFS causing stack overflows
 #CFLAGS += -mno-apcs-stack-check -ffixed-sl
 # No function name poking for a bit extra speed
-CFLAGS += -mno-poke-function-name
+#CFLAGS += -mno-poke-function-name
 # Debug options
-#CFLAGS += -save-temps -mpoke-function-name
+CFLAGS += -save-temps -mpoke-function-name
 # Profiling
 #CFLAGS += -mpoke-function-name -DPROFILE_ENABLED
 #OBJS += prof.o

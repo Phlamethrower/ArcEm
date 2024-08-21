@@ -30,10 +30,13 @@
 
 #define MAX_BATCH_SIZE 1024
 
-int Sound_BatchSize = 1; /* How many DMA fetches to try to do at once */
+int Sound_BatchSize = 1; /* How many 16*2 samples to try to deliver at once */
 unsigned long Sound_DMARate; /* How many cycles between DMA fetches */
 Sound_StereoSense eSound_StereoSense = Stereo_LeftRight;
 int Sound_FudgeRate = 0;
+unsigned long Sound_MaxDesiredRate = 44100*1024;
+
+unsigned int log2downmix = 0;
 
 #ifdef SOUND_SUPPORT
 static SoundData soundTable[256];
@@ -114,7 +117,7 @@ SoundInitTable(void)
               stepSize = (64 * scale) / 16;
               break;
       case 7: chordBase = 127*scale;
-              stepSize = (120 * scale) / 16;
+              stepSize = (128 * scale) / 16;
               break;
       /* End of chord 7 is 247 * scale. */
 
@@ -130,59 +133,17 @@ SoundInitTable(void)
     } else {
       soundTable[i] = sample;
     }
-    if (i == 128) {
-      soundTable[i] = 0xFFFF;
-    }
   }
 }
 
-/**
- * Sound_StereoUpdated
- *
- * Called whenever VIDC stereo image registers are written so that the
- * channelAmount array can be recalculated and the new number of channels can
- * be figured out.
- */
-void Sound_StereoUpdated(ARMul_State *state)
+/* Recalculate channelAmount based around current stereo image registers &
+   downmix rate */
+static void Sound_RecalcChannelAmount(ARMul_State *state)
 {
   int i = 0;
 
-  /* Note that the order of this if block is important for it to
-     pick the right number of channels. */
-
-  /* 1 channel mode? */
-  if (VIDC.StereoImageReg[0] == VIDC.StereoImageReg[1] &&
-      VIDC.StereoImageReg[0] == VIDC.StereoImageReg[2] &&
-      VIDC.StereoImageReg[0] == VIDC.StereoImageReg[3] &&
-      VIDC.StereoImageReg[0] == VIDC.StereoImageReg[4] &&
-      VIDC.StereoImageReg[0] == VIDC.StereoImageReg[5] &&
-      VIDC.StereoImageReg[0] == VIDC.StereoImageReg[6] &&
-      VIDC.StereoImageReg[0] == VIDC.StereoImageReg[7])
-  {
-    log2numchan = 0;
-  }
-  /* 2 channel mode? */
-  else if (VIDC.StereoImageReg[0] == VIDC.StereoImageReg[2] &&
-           VIDC.StereoImageReg[0] == VIDC.StereoImageReg[4] &&
-           VIDC.StereoImageReg[0] == VIDC.StereoImageReg[6] &&
-           VIDC.StereoImageReg[1] == VIDC.StereoImageReg[3] &&
-           VIDC.StereoImageReg[1] == VIDC.StereoImageReg[5] &&
-           VIDC.StereoImageReg[1] == VIDC.StereoImageReg[7])
-  {
-    log2numchan = 1;
-  }
-  /* 4 channel mode? */
-  else if (VIDC.StereoImageReg[0] == VIDC.StereoImageReg[4] &&
-           VIDC.StereoImageReg[1] == VIDC.StereoImageReg[5] &&
-           VIDC.StereoImageReg[2] == VIDC.StereoImageReg[6] &&
-           VIDC.StereoImageReg[3] == VIDC.StereoImageReg[7])
-  {
-    log2numchan = 2;
-  }
-  /* Otherwise it is 8 channel mode. */
-  else {
-    log2numchan = 3;
-  }
+  fprintf(stderr,"RecalcChannelAmount: log2numchan %d log2downmix %d\n",log2numchan,log2downmix);
+  log2downmix = log2numchan;
 
   for (i = 0; i < 8; i++) {
     int reg = VIDC.StereoImageReg[i];
@@ -224,40 +185,141 @@ void Sound_StereoUpdated(ARMul_State *state)
       default: channelAmount[i][0] = channelAmount[i][1] = 0;
     }
 
-    /* We have to share each stereo side between the number of channels. */
-    channelAmount[i][0] >>= log2numchan;
-    channelAmount[i][1] >>= log2numchan;
+    /* Adjust volume by our downmix rate */
+    channelAmount[i][0] >>= log2downmix;
+    channelAmount[i][1] >>= log2downmix;
   }
+}
+
+/**
+ * Sound_StereoUpdated
+ *
+ * Called whenever VIDC stereo image registers are written so that the
+ * channelAmount array can be recalculated and the new number of channels can
+ * be figured out.
+ */
+void Sound_StereoUpdated(ARMul_State *state)
+{
+  /* Note that the order of this if block is important for it to
+     pick the right number of channels. */
+
+  /* 1 channel mode? */
+  if (VIDC.StereoImageReg[0] == VIDC.StereoImageReg[1] &&
+      VIDC.StereoImageReg[0] == VIDC.StereoImageReg[2] &&
+      VIDC.StereoImageReg[0] == VIDC.StereoImageReg[3] &&
+      VIDC.StereoImageReg[0] == VIDC.StereoImageReg[4] &&
+      VIDC.StereoImageReg[0] == VIDC.StereoImageReg[5] &&
+      VIDC.StereoImageReg[0] == VIDC.StereoImageReg[6] &&
+      VIDC.StereoImageReg[0] == VIDC.StereoImageReg[7])
+  {
+    log2numchan = 0;
+  }
+  /* 2 channel mode? */
+  else if (VIDC.StereoImageReg[0] == VIDC.StereoImageReg[2] &&
+           VIDC.StereoImageReg[0] == VIDC.StereoImageReg[4] &&
+           VIDC.StereoImageReg[0] == VIDC.StereoImageReg[6] &&
+           VIDC.StereoImageReg[1] == VIDC.StereoImageReg[3] &&
+           VIDC.StereoImageReg[1] == VIDC.StereoImageReg[5] &&
+           VIDC.StereoImageReg[1] == VIDC.StereoImageReg[7])
+  {
+    log2numchan = 1;
+  }
+  /* 4 channel mode? */
+  else if (VIDC.StereoImageReg[0] == VIDC.StereoImageReg[4] &&
+           VIDC.StereoImageReg[1] == VIDC.StereoImageReg[5] &&
+           VIDC.StereoImageReg[2] == VIDC.StereoImageReg[6] &&
+           VIDC.StereoImageReg[3] == VIDC.StereoImageReg[7])
+  {
+    log2numchan = 2;
+  }
+  /* Otherwise it is 8 channel mode. */
+  else {
+    log2numchan = 3;
+  }
+
+  Sound_RecalcChannelAmount(state);
 }
 
 void Sound_SoundFreqUpdated(ARMul_State *state)
 {
-  /* Do nothing for now */
-//  Sound_StereoUpdated(state);
-}
-
-typedef void (*Sound_ProcessFunc)(unsigned char *in,SoundData *out,int avail);
-
-static void Sound_Process1Channel(unsigned char *in,SoundData *out,int avail)
-{
-  /* Process 1-channel audio */
-  ARMword left = channelAmount[0][0];
-  ARMword right = channelAmount[0][1];
-  while(avail--)
+#if 0
+  /* Calculate sample rate in 1/1024Hz */
+  unsigned long clockin = DisplayDev_GetVIDCClockIn(); 
+  unsigned long sampleRate = ((unsigned long long) clockin)*1024/(24*(VIDC.SoundFreq+2));
+  /* Reduce the rate until it's below our maximum or we hit the max reduction */
+  int downmix = 0;
+  while((sampleRate > Sound_MaxDesiredRate) && (downmix < 4))
   {
-    int i;
-    for(i=0;i<16;i++)
-    {
-      signed short int val = soundTable[*in++];
-      *out++ = (left * val)>>16;
-      *out++ = (right * val)>>16;
-    }
+    sampleRate >>= 1;
+    downmix++;
   }
+  if(downmix != log2downmix)
+  {
+    log2downmix = downmix;
+    Sound_RecalcChannelAmount(state);
+  }
+#endif
 }
 
-static void Sound_Process2Channel(unsigned char *in,SoundData *out,int avail)
+typedef void (*Sound_ProcessFunc)(const unsigned char *in,SoundData *out,int avail);
+
+/* Process 1-channel audio */
+#define SOUND_PROCESS1CHANNEL(A,B) \
+static void Sound_Process1Channel ## B(const unsigned char *in,SoundData *out,int avail) \
+{ \
+  ARMword left = channelAmount[0][0]; \
+  ARMword right = channelAmount[0][1]; \
+  while(avail--) \
+  { \
+    int i,j; \
+    for(i=0;i<A;i++) \
+    { \
+      long val = 0; \
+      for(j=0;j<B;j++) \
+        val += (signed short int) soundTable[*in++]; \
+      *out++ = (left * val)>>16; \
+      *out++ = (right * val)>>16; \
+    } \
+  } \
+}
+
+SOUND_PROCESS1CHANNEL(16,1) /* log2downmix == 0 */
+SOUND_PROCESS1CHANNEL(8,2) /* log2downmix == 1 */
+SOUND_PROCESS1CHANNEL(4,4) /* log2downmix == 2 */
+SOUND_PROCESS1CHANNEL(2,8) /* log2downmix == 3 */
+SOUND_PROCESS1CHANNEL(1,16) /* log2downmix == 4 */
+
+/* Process 2-channel audio */
+#define SOUND_PROCESS2CHANNEL(A,B) \
+static void Sound_Process2Channel ## B(const unsigned char *in,SoundData *out,int avail) \
+{ \
+  ARMword left0 = channelAmount[0][0]; \
+  ARMword right0 = channelAmount[0][1]; \
+  ARMword left1 = channelAmount[1][0]; \
+  ARMword right1 = channelAmount[1][1]; \
+  while(avail--) \
+  { \
+    int i,j; \
+    for(i=0;i<A;i++) \
+    { \
+      ARMword leftmix = 0; \
+      ARMword rightmix = 0; \
+      for(j=0;j<B;j+=2) \
+      { \
+        signed short int val0 = soundTable[*in++]; \
+        signed short int val1 = soundTable[*in++]; \
+        leftmix += (left0 * val0) + (left1 * val1); \
+        rightmix += (right0 * val0) + (right1 * val1); \
+      } \
+      *out++ = leftmix>>16; \
+      *out++ = rightmix>>16; \
+    } \
+  } \
+}
+
+/* Special version for log2downmix == 0 */
+static void Sound_Process2Channel1(const unsigned char *in,SoundData *out,int avail)
 {
-  /* Process 2-channel audio */
   ARMword left0 = channelAmount[0][0];
   ARMword right0 = channelAmount[0][1];
   ARMword left1 = channelAmount[1][0];
@@ -267,61 +329,69 @@ static void Sound_Process2Channel(unsigned char *in,SoundData *out,int avail)
     int i;
     for(i=0;i<8;i++)
     {
-      signed short int val0 = soundTable[*in++];
-      signed short int val1 = soundTable[*in++];
-      ARMword leftmix = (left0 * val0) + (left1 * val1);
-      ARMword rightmix = (right0 * val0) + (right1 * val1);
-      *out++ = leftmix>>16;
-      *out++ = rightmix>>16;
+      signed short int val = (signed short int) soundTable[*in++];
+      *out++ = (left0 * val)>>16;
+      *out++ = (right0 * val)>>16;
+      val = (signed short int) soundTable[*in++];
+      *out++ = (left1 * val)>>16;
+      *out++ = (right1 * val)>>16;
     }
   }
 }
+SOUND_PROCESS2CHANNEL(8,2) /* log2downmix == 1 */
+SOUND_PROCESS2CHANNEL(4,4) /* log2downmix == 2 */
+SOUND_PROCESS2CHANNEL(2,8) /* log2downmix == 3 */
+SOUND_PROCESS2CHANNEL(1,16) /* log2downmix == 4 */
 
-static void Sound_Process4Channel(unsigned char *in,SoundData *out,int avail)
+/* 4 & 8 channel processing
+   Assume that the CPU doesn't have enough registers spare to hold the required
+   channelAmount values, or that the compiler is smart enough to optimise it
+   for us
+*/
+
+#define SOUND_PROCESS48CHANNEL(CHAN,DOWN) \
+static void Sound_Process ## CHAN ## Channel ## DOWN(const unsigned char *in,SoundData *out,int avail) \
+{ \
+  ARMword leftmix=0,rightmix=0; \
+  int i=0,j=DOWN; \
+  avail *= 16; \
+  while(avail--) \
+  { \
+    signed short int val = soundTable[*in++]; \
+    leftmix += channelAmount[i][0] * val; \
+    rightmix += channelAmount[i][1] * val; \
+    if(++i == CHAN) \
+      i = 0; \
+    if(!--j) \
+    { \
+      j = DOWN;\
+      *out++ = leftmix>>16; \
+      *out++ = rightmix>>16; \
+      leftmix = 0; \
+      rightmix = 0; \
+    } \
+  } \
+}
+
+SOUND_PROCESS48CHANNEL(4,1)
+SOUND_PROCESS48CHANNEL(4,2)
+SOUND_PROCESS48CHANNEL(4,4)
+SOUND_PROCESS48CHANNEL(4,8)
+SOUND_PROCESS48CHANNEL(4,16)
+
+SOUND_PROCESS48CHANNEL(8,1)
+SOUND_PROCESS48CHANNEL(8,2)
+SOUND_PROCESS48CHANNEL(8,4)
+SOUND_PROCESS48CHANNEL(8,8)
+SOUND_PROCESS48CHANNEL(8,16)
+
+static const Sound_ProcessFunc processfuncs[4][5] =
 {
-  /* Process 4-channel audio */
-  avail *= 4;
-  while(avail--)
-  {
-    ARMword leftmix=0,rightmix=0;
-    int i;
-    for(i=0;i<4;i++)
-    {
-      signed short int val = soundTable[*in++];
-      leftmix += channelAmount[i][0] * val;
-      rightmix += channelAmount[i][1] * val;
-    }
-    *out++ = leftmix>>16;
-    *out++ = rightmix>>16;
-  }
-}
-
-static void Sound_Process8Channel(unsigned char *in,SoundData *out,int avail)
-{
-  /* Process 8-channel audio */
-  avail *= 2;
-  while(avail--)
-  {
-    ARMword leftmix=0,rightmix=0;
-    int i;
-    for(i=0;i<8;i++)
-    {
-      signed short int val = soundTable[*in++];
-      leftmix += channelAmount[i][0] * val;
-      rightmix += channelAmount[i][1] * val;
-    }
-    *out++ = leftmix>>16;
-    *out++ = rightmix>>16;
-  }
-}
-
-static const Sound_ProcessFunc processfuncs[4] =
-  {
-    Sound_Process1Channel,
-    Sound_Process2Channel,
-    Sound_Process4Channel,
-    Sound_Process8Channel
-  };
+  { Sound_Process1Channel1, Sound_Process1Channel2, Sound_Process1Channel4, Sound_Process1Channel8, Sound_Process1Channel16 },
+  { Sound_Process2Channel1, Sound_Process2Channel2, Sound_Process2Channel4, Sound_Process2Channel8, Sound_Process2Channel16 },
+  { Sound_Process4Channel1, Sound_Process4Channel2, Sound_Process4Channel4, Sound_Process4Channel8, Sound_Process4Channel16 },
+  { Sound_Process8Channel1, Sound_Process8Channel2, Sound_Process8Channel4, Sound_Process8Channel8, Sound_Process8Channel16 },
+};
 #endif /* SOUND_SUPPORT */
 
 static void Sound_DMAEvent(ARMul_State *state,CycleCount nowtime)
@@ -330,13 +400,36 @@ static void Sound_DMAEvent(ARMul_State *state,CycleCount nowtime)
   /* How many DMA fetches are possible? */
   int avail = 0;
   if(MEMC.ControlReg & (1 << 11))
+  {
+    /* Trigger any pending buffer swap */
+    if(MEMC.Sptr > MEMC.SendC)
+    {
+      /* Have the next buffer addresses been written? */
+      if (MEMC.NextSoundBufferValid == 1) {
+        /* Yes, so change to the next buffer */
+        ARMword swap;
+    
+        MEMC.Sptr = MEMC.Sstart;
+        MEMC.SstartC = MEMC.Sstart;
+    
+        swap = MEMC.SendC;
+        MEMC.SendC = MEMC.SendN;
+        MEMC.SendN = swap;
+    
+        ioc.IRQStatus |= IRQB_SIRQ; /* Take sound interrupt on */
+        IO_UpdateNirq(state);
+    
+        MEMC.NextSoundBufferValid = 0;
+      } else {
+        /* Otherwise wrap to the beginning of the buffer */
+        MEMC.Sptr = MEMC.SstartC;
+      }
+    }
     avail = ((MEMC.SendC+16)-MEMC.Sptr)>>4;
-  if(avail > Sound_BatchSize)
-    avail = Sound_BatchSize;
-  /* Work out when to reschedule the event
-     This is slightly wrong, since we time it based around how long it takes
-     to process this data, but if we finish a buffer we trigger the swap
-     immediately instead of at the start of the next event */
+  }
+  if(avail > (Sound_BatchSize<<log2downmix))
+    avail = Sound_BatchSize<<log2downmix;
+  /* Work out when to reschedule the event */
   int next = Sound_DMARate*(avail?avail:Sound_BatchSize)+Sound_FudgeRate;
   /* Clamp to a safe minimum value */
   if(next < 100)
@@ -346,35 +439,12 @@ static void Sound_DMAEvent(ARMul_State *state,CycleCount nowtime)
     return;
 #ifdef SOUND_SUPPORT
   /* Process the data */
-  (processfuncs[log2numchan])(((unsigned char *) MEMC.PhysRam) + MEMC.Sptr,soundBuffer,avail);
+  (processfuncs[log2numchan][log2downmix])(((unsigned char *) MEMC.PhysRam) + MEMC.Sptr,soundBuffer,avail);
   /* Pass it to the host */
-  Sound_HandleData(soundBuffer,(avail*16)>>log2numchan,(VIDC.SoundFreq+2)<<log2numchan);
+  Sound_HandleData(soundBuffer,(avail*16)>>log2downmix,(VIDC.SoundFreq+2)<<log2downmix);
 #endif
   /* Update DMA stuff */
   MEMC.Sptr += avail<<4;
-  if(MEMC.Sptr > MEMC.SendC)
-  {
-    /* Have the next buffer addresses been written? */
-    if (MEMC.NextSoundBufferValid == 1) {
-      /* Yes, so change to the next buffer */
-      ARMword swap;
-
-      MEMC.Sptr = MEMC.Sstart;
-      MEMC.SstartC = MEMC.Sstart;
-
-      swap = MEMC.SendC;
-      MEMC.SendC = MEMC.SendN;
-      MEMC.SendN = swap;
-
-      ioc.IRQStatus |= IRQB_SIRQ; /* Take sound interrupt on */
-      IO_UpdateNirq(state);
-
-      MEMC.NextSoundBufferValid = 0;
-    } else {
-      /* Otherwise wrap to the beginning of the buffer */
-      MEMC.Sptr = MEMC.SstartC;
-    }
-  }
 }
 
 int Sound_Init(ARMul_State *state)
