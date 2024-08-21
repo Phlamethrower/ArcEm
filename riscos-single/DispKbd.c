@@ -25,6 +25,7 @@
 
 #define ENABLE_MENU
 
+extern FILE *Sound_CaptureFile;
 
 #ifdef ENABLE_MENU
 static int enable_screenshots = 0;
@@ -933,6 +934,8 @@ static const char *values_bool[] = {"Off","On",NULL};
 static const char *values_display[] = {"Palettised","16bpp",NULL};
 static const char *values_skip[] = {"0","1","2","3","4",NULL};
 
+int soundcap=0;
+
 static const menu_item items[] =
 {
   {"Display driver",values_display,&hArcemConfig.eDisplayDriver},
@@ -942,6 +945,7 @@ static const menu_item items[] =
   {"2X upscaling",values_bool,&hArcemConfig.bUpscale},
   {"Take screenshots on Print Screen",values_bool,&enable_screenshots},
   {"Show stats",values_bool,&enable_stats},
+  {"Sound capture",values_bool,&soundcap},
   {"Resume",NULL,NULL},
   {"Quit",NULL,NULL},
 };
@@ -992,6 +996,28 @@ static void GoMenu(void)
       *(items[c].val) = val;
     }
   } while(1);
+  /* Sound capture */
+  if((soundcap != 0) != (Sound_CaptureFile != NULL))
+  {
+    if(soundcap)
+    {
+      static int count=0;
+      static char buf[BUFSIZ];
+      sprintf(buf,"<ArcEm$Dir>.^.snd.soundcap%d",count++);
+      Sound_CaptureFile = fopen(buf,"wb");
+      if(!Sound_CaptureFile)
+      {
+        fprintf(stderr,"Failed to open %s\n",buf);
+        exit(EXIT_FAILURE);
+      }
+      setbuf(Sound_CaptureFile,buf);
+    }
+    else
+    {
+      fclose(Sound_CaptureFile);
+      Sound_CaptureFile = NULL;
+    }
+  }
   /* (re)start display device. Even if we haven't changed anything, this is needed to force the screen to be redrawn (and the mode to be reset) */
   if(DisplayDev_Set(&statestr,displays[hArcemConfig.eDisplayDriver]))
   {

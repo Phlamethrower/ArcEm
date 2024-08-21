@@ -43,6 +43,23 @@ unsigned int log2numchan = 0;
 static SoundData soundBuffer[16*2*MAX_BATCH_SIZE];
 #endif
 
+#if 1//def SOUND_CAPTURE
+FILE *Sound_CaptureFile=NULL;
+
+static void Sound_Capture(ARMul_State *state,unsigned char *in,int avail)
+{
+  if(!Sound_CaptureFile)
+    return;
+  /* Dump out stereo settings, sample rate, length */
+  fwrite(VIDC.StereoImageReg,sizeof(VIDC.StereoImageReg[0]),8,Sound_CaptureFile);
+  fwrite(&VIDC.SoundFreq,sizeof(VIDC.SoundFreq),1,Sound_CaptureFile);
+  fwrite(&avail,sizeof(avail),1,Sound_CaptureFile);
+  fwrite(in,sizeof(unsigned char),avail*16,Sound_CaptureFile);
+}
+#else
+#define Sound_Capture(A,B,C)
+#endif
+
 void Sound_UpdateDMARate(ARMul_State *state)
 {
   /* Calculate a new value for how often we should trigger a sound DMA fetch
@@ -205,7 +222,7 @@ void Sound_StereoUpdated(ARMul_State *state)
               break;
 
       /* Right 100% */
-      case 5: channelAmount[i][1] = (ARMword) (1.0*65536);
+      case 7: channelAmount[i][1] = (ARMword) (1.0*65536);
               channelAmount[i][0] = (ARMword) (0.0*65536);
               break;
       /* Right 83% */
@@ -213,7 +230,7 @@ void Sound_StereoUpdated(ARMul_State *state)
               channelAmount[i][0] = (ARMword) (0.17*65536);
               break;
       /* Right 67% */
-      case 7: channelAmount[i][1] = (ARMword) (0.67*65536);
+      case 5: channelAmount[i][1] = (ARMword) (0.67*65536);
               channelAmount[i][0] = (ARMword) (0.33*65536);
               break;
 
@@ -364,6 +381,7 @@ static void Sound_DMAEvent(ARMul_State *state,CycleCount nowtime)
   EventQ_RescheduleHead(state,nowtime+next,Sound_DMAEvent);
   if(avail < 1)
     return;
+  Sound_Capture(state,((unsigned char *) MEMC.PhysRam) + MEMC.Sptr,avail);
 #ifdef SOUND_SUPPORT
   /* Process the data */
   (processfuncs[log2numchan])(((unsigned char *) MEMC.PhysRam) + MEMC.Sptr,soundBuffer,avail);
