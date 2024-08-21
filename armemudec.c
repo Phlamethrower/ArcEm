@@ -1,12 +1,20 @@
     switch ((int)BITS(24,27)) {
       case 0x0: {
-          static ARMEmuFunc funcs0[16]={
-            EMFUNCDECL26(AndRegMul), EMFUNCDECL26(AndsRegMuls), EMFUNCDECL26(EorRegMla), EMFUNCDECL26(EorsRegMlas),
-            EMFUNCDECL26(SubReg), EMFUNCDECL26(SubsReg), EMFUNCDECL26(RsbReg), EMFUNCDECL26(RsbsReg),
-            EMFUNCDECL26(AddReg), EMFUNCDECL26(AddsReg), EMFUNCDECL26(AdcReg), EMFUNCDECL26(AdcsReg),
-            EMFUNCDECL26(SbcReg), EMFUNCDECL26(SbcsReg), EMFUNCDECL26(RscReg), EMFUNCDECL26(RscsReg)
-          };
-          f=funcs0[(int)BITS(20,23)];
+          int i = BITS(20,23);
+          if((i<4) && (BITS(4,7) == 9)) {
+            static ARMEmuFunc funcs0[4]={
+              EMFUNCDECL26(Mul), EMFUNCDECL26(Muls), EMFUNCDECL26(Mla), EMFUNCDECL26(Mlas)
+            };
+            f=funcs0[i];
+          } else {            
+            static ARMEmuFunc funcs0[16]={
+              EMFUNCDECL26(AndReg), EMFUNCDECL26(AndsReg), EMFUNCDECL26(EorReg), EMFUNCDECL26(EorsReg),
+              EMFUNCDECL26(SubReg), EMFUNCDECL26(SubsReg), EMFUNCDECL26(RsbReg), EMFUNCDECL26(RsbsReg),
+              EMFUNCDECL26(AddReg), EMFUNCDECL26(AddsReg), EMFUNCDECL26(AdcReg), EMFUNCDECL26(AdcsReg),
+              EMFUNCDECL26(SbcReg), EMFUNCDECL26(SbcsReg), EMFUNCDECL26(RscReg), EMFUNCDECL26(RscsReg)
+            };
+            f=funcs0[i];
+          }
         };
       break;
 
