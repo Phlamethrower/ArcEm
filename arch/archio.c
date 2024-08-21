@@ -20,6 +20,9 @@
 # include "hostfs.h"
 #endif
 
+#define MIN(a,b) ((a)<(b)?(a):(b))
+#define MAX(a,b) ((a)>(b)?(a):(b))
+
 /*#define IOC_TRACE*/
 
 struct IOCStruct ioc;
@@ -45,7 +48,8 @@ IO_Init(ARMul_State *state)
   ioc.TimerInputLatch[3] = 0xffff;
   ioc.Timer0CanInt = ioc.Timer1CanInt = 1;
   ioc.TimersLastUpdated = -1;
-  ioc.NextTimerTrigger = ARMul_Time;
+  ioc.NextTimerTrigger = ARMul_Time; 
+  ioc.IOCRate = ioc.InvIOCRate = 0x10000; /* Default values shouldn't matter so much */
   EventQ_Insert(state,ARMul_Time,UpdateTimerRegisters_Event);
 
   IO_UpdateNirq(state);
@@ -93,12 +97,18 @@ CalcCanTimerInt(ARMul_State *state)
   int oldTimer0CanInt = ioc.Timer0CanInt;
   int oldTimer1CanInt = ioc.Timer1CanInt;
 
+#if 0 /* This old code was wrong and was preventing RISC OS from booting, since RISC OS checks that the timers are working (or something) by programming one of them while the IRQ is masked out */
   /* If its not causing an interrupt at the moment, and its interrupt is
      enabled */
   ioc.Timer0CanInt = ((ioc.IRQStatus & IRQA_TM0) == 0) &&
                      ((ioc.IRQMask & IRQA_TM0) != 0);
   ioc.Timer1CanInt = ((ioc.IRQStatus & IRQA_TM1) == 0) &&
                      ((ioc.IRQMask & IRQA_TM1) != 0);
+#else
+  /* New code: Just look at the current IRQ status (although chances are that's wrong as well?) */
+  ioc.Timer0CanInt = ((ioc.IRQStatus & IRQA_TM0) == 0);
+  ioc.Timer1CanInt = ((ioc.IRQStatus & IRQA_TM1) == 0);
+#endif
 
   /* If any have just been enabled update the triggers */
   if (((!oldTimer0CanInt) && (ioc.Timer0CanInt)) ||
@@ -113,7 +123,7 @@ static int
 GetCurrentTimerVal(ARMul_State *state,int toget)
 {
   long timeSinceLastUpdate = ARMul_Time - ioc.TimersLastUpdated;
-  long scaledTimeSlip = timeSinceLastUpdate / TIMERSCALE;
+  long scaledTimeSlip = (((unsigned long long) timeSinceLastUpdate) * ioc.IOCRate)>>16;
   long tmpL;
   int result;
 
@@ -130,10 +140,16 @@ GetCurrentTimerVal(ARMul_State *state,int toget)
 static void UpdateTimerRegisters_Internal(ARMul_State *state,CycleCount nowtime,int idx)
 {
   CycleDiff timeSinceLastUpdate = nowtime - ioc.TimersLastUpdated;
-  CycleDiff scaledTimeSlip = timeSinceLastUpdate / TIMERSCALE;
+  CycleDiff scaledTimeSlip = (((unsigned long long) timeSinceLastUpdate) * ioc.IOCRate)>>16;
   unsigned long tmpL;
 
-  CycleDiff nextTrigger = MAX_CYCLES_INTO_FUTURE;
+  /* In theory we should be able to use MAX_CYCLES_INTO_FUTURE as our default
+     next trigger time. But some software (e.g. Lotus Turbo Challenge II) seems
+     to break and get stuck in a loop waiting for an interrupt which never
+     happens (presumably due a bug in ArcEm somewhere).
+     So use a failsafe default next trigger time of 65536 IOC cycles from now
+     (i.e. the max possible timer period) */
+  CycleDiff nextTrigger = ioc.InvIOCRate; /* a.k.a. 65536 IOC cycles from now */
 
   /* ----------------------------------------------------------------- */
   tmpL = ioc.TimerInputLatch[0];
@@ -148,7 +164,7 @@ static void UpdateTimerRegisters_Internal(ARMul_State *state,CycleCount nowtime,
   if (ioc.TimerCount[0] < 0) ioc.TimerCount[0] += tmpL;
 
   if (ioc.Timer0CanInt) {
-    tmpL = (ioc.TimerCount[0] * TIMERSCALE);
+    tmpL = (((unsigned long long) ioc.TimerCount[0]) * ioc.InvIOCRate) >> 16;
     if (tmpL < nextTrigger) nextTrigger = tmpL;
   }
 
@@ -164,21 +180,31 @@ static void UpdateTimerRegisters_Internal(ARMul_State *state,CycleCount nowtime,
   if (ioc.TimerCount[1] < 0) ioc.TimerCount[1] += tmpL;
 
   if (ioc.Timer1CanInt) {
-    tmpL = (ioc.TimerCount[1] * TIMERSCALE);
+    tmpL = (((unsigned long long) ioc.TimerCount[1]) * ioc.InvIOCRate) >> 16;
     if (tmpL < nextTrigger) nextTrigger = tmpL;
   }
 
   /* ----------------------------------------------------------------- */
   if (ioc.TimerInputLatch[2]) {
     ioc.TimerCount[2] -= (scaledTimeSlip % ioc.TimerInputLatch[2]);
+    if(ioc.TimerCount[2] < 0) ioc.TimerCount[2] += ioc.TimerInputLatch[2];
   }
 
   /* ----------------------------------------------------------------- */
   if (ioc.TimerInputLatch[3]) {
     ioc.TimerCount[3] -= (scaledTimeSlip % ioc.TimerInputLatch[3]);
+    if(ioc.TimerCount[3] < 0) ioc.TimerCount[3] += ioc.TimerInputLatch[3];
   }
 
   ioc.TimersLastUpdated = nowtime;
+
+  /* Don't get stuck if we're waiting for something that's about to fire */
+  if(!idx && (nextTrigger < 32768) && (nextTrigger*ioc.IOCRate < 65536))
+  {
+    do {
+      nextTrigger = (nextTrigger<<1) | 1;
+    } while(nextTrigger*ioc.IOCRate < 65536);
+  }
 
   ioc.NextTimerTrigger = nowtime + nextTrigger;
   EventQ_Reschedule(state,nowtime + nextTrigger,UpdateTimerRegisters_Event,idx);

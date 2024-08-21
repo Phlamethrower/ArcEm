@@ -31,6 +31,9 @@ struct IOCStruct {
   unsigned long NextTimerTrigger;
   unsigned int Timer0CanInt;
   unsigned int Timer1CanInt;
+
+  unsigned long IOCRate; /* Number of IOC clock ticks per emu cycle, in 16.16 fixed-point format */
+  unsigned long InvIOCRate; /* Inverse IOC rate, 16.16 */
 };
 
 extern struct IOCStruct ioc;
@@ -57,9 +60,6 @@ extern struct IOCStruct ioc;
 #define FIQ_PFIQ    (1U << 6)   /* Podule FIQ request */
 #define FIQ_FORCE   (1U << 7)   /* Software generated FIQ */
 
-
-#define TIMERSCALE 3
-#define IOCTIMERSTEP 1
 
 /*------------------------------------------------------------------------------*/
 void IOC_DoIntCheck(ARMul_State *state);

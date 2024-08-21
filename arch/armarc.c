@@ -178,7 +178,7 @@ ARMul_MemoryInit(ARMul_State *state)
   if (ROMFile = fopen(hArcemConfig.sRomImageName, "rb"), ROMFile == NULL) {
 #endif
     fprintf(stderr, "Couldn't open ROM file\n");
-    exit(EXIT_FAILURE);
+    exit(2);
   }
 #endif
 

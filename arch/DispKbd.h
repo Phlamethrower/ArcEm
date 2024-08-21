@@ -90,7 +90,8 @@ struct DisplayInfo {
     /* Values that must only get updated by the event queue/screen blit code */
     
     char ForceRefresh; /* =1 for the entire frame if the mode has just changed */
-    char DMAEn; /* 1/0 whether video DMA is enabled for this frame */ 
+    char DMAEn; /* 1/0 whether video DMA is enabled for this frame */
+    char FLYBK; /* Flyback signal (i.e. whether we've triggered VSync IRQ this frame) */ 
     int LastHostWidth,LastHostHeight,LastHostHz; /* Values we used to request host mode */
     int LastRow; /* Row last event was scheduled to run up to */
     int NextRow; /* Row next event is scheduled to run up to */

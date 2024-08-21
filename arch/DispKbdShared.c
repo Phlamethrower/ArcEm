@@ -29,9 +29,9 @@
 #define HD HOSTDISPLAY
 
 /* How many rows for video to process at once */
-#define ROWS_AT_ONCE 2
+#define ROWS_AT_ONCE 1
 
-#define VIDEO_STATS
+//#define VIDEO_STATS
 
 #ifdef VIDEO_STATS
 #define VIDEO_STAT(STAT,COND,AMT) if(COND) {vidstats[vidstat_##STAT] += AMT;}
@@ -81,11 +81,11 @@ static const char *vidstatnames[vidstat_MAX] = {
 
 static void vidstats_Dump(const char *c)
 {
-  puts(c);
+  fprintf(stderr,"%s\n",c);
   int i;
   for(i=0;i<vidstat_MAX;i++)
   {
-    printf("%12u %s\n",vidstats[i],vidstatnames[i]);
+    fprintf(stderr,"%12u %s\n",vidstats[i],vidstatnames[i]);
     vidstats[i] = 0;
   }
 }
@@ -977,11 +977,25 @@ static void Display_FrameEnd(ARMul_State *state,CycleCount nowtime); /* Trigger 
 static void Display_FrameStart(ARMul_State *state,CycleCount nowtime); /* End of vsync, prepare for new frame */
 static void Display_RowStart(ARMul_State *state,CycleCount nowtime); /* Fill in a display/border row */
 
+static void Display_Flyback(ARMul_State *state)
+{
+  if(DC.FLYBK)
+    return;
+
+  /* Trigger VSync interrupt */
+  DC.FLYBK = 1;
+  ioc.IRQStatus|=IRQA_VFLYBK;
+  IO_UpdateNirq(state);
+}
+
 static void Display_Reschedule(ARMul_State *state,CycleCount nowtime,EventQ_Func func,int row)
 {
   /* Force frame end just in case registers have been poked mid-frame */
-  if(row > VIDC.Vert_Cycle+1)
+  if(row >= VIDC.Vert_Cycle+1)
+  {
     func = Display_FrameEnd;
+    Display_Flyback(state);
+  }
   int rows = row-DC.NextRow;
   if(rows < 1)
     rows = 1;
@@ -1029,6 +1043,8 @@ static void Display_FrameStart(ARMul_State *state,CycleCount nowtime)
 
   DC.VIDC_CR = NewCR;
 
+  DC.FLYBK = 0;
+
   /* Handle any mode changes */
   if(DC.ModeChanged)
   {
@@ -1040,7 +1056,7 @@ static void Display_FrameStart(ARMul_State *state,CycleCount nowtime)
     
     if((Width != DC.LastHostWidth) || (Height != DC.LastHostHeight) || (FrameRate != DC.LastHostHz))
     {
-      printf("New mode: %dx%d, %dHz (CR %x)\n",Width,Height,FrameRate,NewCR);
+      fprintf(stderr,"New mode: %dx%d, %dHz (CR %x)\n",Width,Height,FrameRate,NewCR);
 #ifdef VIDEO_STATS
       vidstats_Dump("Stats for previous mode");
 #endif
@@ -1083,15 +1099,13 @@ static void Display_FrameStart(ARMul_State *state,CycleCount nowtime)
 static void Display_FrameEnd(ARMul_State *state,CycleCount nowtime)
 {
   VIDEO_STAT(DisplayFrames,1,1);
-  
+
+  Display_Flyback(state); /* Paranoia */
+
   /* Set up the next frame */
   DC.LastRow = 0;
   DC.NextRow = VIDC.Vert_SyncWidth+1;
   EventQ_RescheduleHead(state,nowtime+DC.NextRow*DC.LineRate,Display_FrameStart);
-  /* Trigger interrupts */
-  ioc.IRQStatus|=IRQA_VFLYBK; /* VSync */
-  ioc.IRQStatus |= IRQA_TM0; /* This seems to be required for RO to boot? */
-  IO_UpdateNirq(state);
 }
 
 static void Display_RowStart(ARMul_State *state,CycleCount nowtime)
@@ -1116,6 +1130,7 @@ static void Display_RowStart(ARMul_State *state,CycleCount nowtime)
     else if(row < (VIDC.Vert_BorderEnd+1))
     {
       /* Border again */
+      Display_Flyback(state);
       Display_BorderRow(state,row);
     }
     else
@@ -1373,6 +1388,7 @@ DisplayKbd_Init(ARMul_State *state)
   DC.MaxRow = 0;
   DC.VIDC_CR = 0;
   DC.DMAEn = 0;
+  DC.FLYBK = 0;
   DC.LineRate = 10000;
   DC.LastVinit = MEMC.Vinit;
 
