@@ -58,6 +58,8 @@ typedef struct {
 HostMode *ModeList;
 int NumModes;
 
+static int current_hz;
+
 static HostMode *SelectROScreenMode(int x, int y, int aspect, int depths, int *outxscale, int *outyscale);
 
 #ifndef PROFILE_ENABLED /* Profiling code uses a nasty hack to estimate program size, which will only work if we're using the wimpslot for our heap */
@@ -185,6 +187,8 @@ SDD_Name(Host_PollDisplay)(ARMul_State *state);
 
 static void SDD_Name(Host_ChangeMode)(ARMul_State *state,int width,int height,int hz)
 {
+  current_hz = hz;
+
   /* Search the mode list for the best match */
   int aspect;
   if(width*2 <= height)
@@ -225,6 +229,13 @@ SDD_Name(Host_PollDisplay)(ARMul_State *state)
 
 static int BorderPalEntry;
 
+static int PDD_FrameSkip = 0;
+
+typedef struct {
+  ARMword *data;
+  int offset;
+} PDD_Row;
+
 static void PDD_Name(Host_ChangeMode)(ARMul_State *state,int width,int height,int depth,int hz);
 
 static void PDD_Name(Host_SetPaletteEntry)(ARMul_State *state,int i,unsigned int phys)
@@ -257,14 +268,33 @@ static void PDD_Name(Host_SetBorderColour)(ARMul_State *state,unsigned int phys)
   }
 }
 
-static inline ARMword *PDD_Name(Host_GetRow)(ARMul_State *state,int row,int offset,int *outoffset)
+static inline PDD_Row PDD_Name(Host_BeginRow)(ARMul_State *state,int row,int offset,int *alignment)
 {
+  PDD_Row drow;
   ARMword base = ModeVarsOut[MODE_VAR_ADDR] + ModeVarsOut[MODE_VAR_BPL]*row;
   offset = offset<<ModeVarsOut[MODE_VAR_LOG2BPP];
   base += offset>>3;
-  *outoffset = (offset & 0x7) | ((base<<3) & 0x18); /* Just in case bytes per line isn't aligned */
-  base &= ~0x3;
-  return (ARMword *) base;
+  drow.offset = (offset & 0x7) | ((base<<3) & 0x18); /* Just in case bytes per line isn't aligned */
+  drow.data = (ARMword *) (base & ~0x3);
+  *alignment = drow.offset;
+  return drow;
+}
+
+static inline void PDD_Name(Host_EndRow)(ARMul_State *state,PDD_Row *row) { /* nothing */ };
+
+static inline ARMword *PDD_Name(Host_BeginUpdate)(ARMul_State *state,PDD_Row *row,unsigned int count,int *outoffset)
+{
+  *outoffset = row->offset;
+  return row->data;
+}
+
+static inline void PDD_Name(Host_EndUpdate)(ARMul_State *state,PDD_Row *row) { /* nothing */ };
+
+static inline void PDD_Name(Host_AdvanceRow)(ARMul_State *state,PDD_Row *row,unsigned int count)
+{
+  row->offset += count;
+  row->data += count>>5;
+  row->offset &= 0x1f;
 }
 
 static void
@@ -287,6 +317,8 @@ static void PDD_Name(Host_DrawBorderRect)(ARMul_State *state,int x,int y,int wid
 
 void PDD_Name(Host_ChangeMode)(ARMul_State *state,int width,int height,int depth,int hz)
 {
+  current_hz = hz;
+
   /* Search the mode list for the best match */
   int aspect;
   if(width*2 <= height)
@@ -541,7 +573,7 @@ static void Host_PollDisplay_Common(ARMul_State *state,const DisplayParams *para
       
       const float scale = ((float)CLOCKS_PER_SEC)/1000000.0f;
       float mhz = scale*((float)(ARMul_Time-oldcycles))/((float)(nowtime2-oldtime));
-      printf("\x1e%.2fMHz %dx%d %dbpp %d:%d %dfps   \n",mhz,(VIDC.Horiz_DisplayEnd-VIDC.Horiz_DisplayStart)*2,VIDC.Vert_DisplayEnd-VIDC.Vert_DisplayStart,1<<((VIDC.ControlReg>>2)&3),params->XScale,params->YScale,fps);
+      printf("\x1e%.2fMHz %dx%d %dHz %dbpp %d:%d %dfps   \n",mhz,(VIDC.Horiz_DisplayEnd-VIDC.Horiz_DisplayStart)*2,VIDC.Vert_DisplayEnd-VIDC.Vert_DisplayStart,current_hz,1<<((VIDC.ControlReg>>2)&3),params->XScale,params->YScale,fps);
       oldcycles = ARMul_Time;
       oldtime = nowtime2;
       fps = 0;
@@ -743,7 +775,7 @@ Kbd_PollHostKbd(ARMul_State *state)
   }
 
   return 0;
-} /* DisplayKbd_PollHostKbd */
+} /* Kbd_PollHostKbd */
 
 /*-----------------------------------------------------------------------------*/
 
@@ -899,11 +931,13 @@ typedef struct {
 
 static const char *values_bool[] = {"Off","On",NULL};
 static const char *values_display[] = {"Palettised","16bpp",NULL};
+static const char *values_skip[] = {"0","1","2","3","4",NULL};
 
 static const menu_item items[] =
 {
   {"Display driver",values_display,&hArcemConfig.eDisplayDriver},
   {"Red/blue swap 16bpp output",values_bool,&hArcemConfig.bRedBlueSwap},
+  {"Palettised output frameskip",values_skip,&PDD_FrameSkip},
   {"Aspect ratio correction",values_bool,&hArcemConfig.bAspectRatioCorrection},
   {"2X upscaling",values_bool,&hArcemConfig.bUpscale},
   {"Take screenshots on Print Screen",values_bool,&enable_screenshots},

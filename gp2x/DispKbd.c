@@ -522,7 +522,7 @@ static void MouseMoved(ARMul_State *state, int xdiff, int ydiff ) {
 
 /*----------------------------------------------------------------------------*/
 int
-DisplayKbd_PollHost(ARMul_State *state)
+Kbd_PollHostKbd(ARMul_State *state)
 {
     int run=0;
     int MouseX=0, MouseY=0;
@@ -607,7 +607,7 @@ DisplayKbd_PollHost(ARMul_State *state)
       }
   }
   return run;
-} /* DisplayKbd_PollHost */
+} /* Kbd_PollHostKbd */
 
 
 static void UpdateGp2xScreenFromVIDC(void)

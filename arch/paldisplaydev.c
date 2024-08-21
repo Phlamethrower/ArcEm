@@ -9,11 +9,27 @@
    This is the core implementation of the palettised display driver. It's a
    driver for use with palettised output modes. Overall it's faster and uses
    less memory than the standard display driver, but it lacks the ability to
-   cope with advanced things like mid-frame palette swaps. Border and cursor
-   display is the responsiblity of the host.
+   cope with advanced things like mid-frame palette swaps. Border display
+   method is the responsibility of the host, but the core will generate border
+   update notifications. Cursor display is fully the responsibility of the host.
 
    The output buffer is updated once per frame, at the start of the vblank
-   period. 
+   period.
+
+   Where possible the code will try to simply copy the source pixels straight
+   to the destination buffer. For situations where this isn't possible (e.g. the
+   host doesn't support 1/2/4bpp palettised modes, or horizontal upscaling is
+   desired) a lookup table is used to convert the data. This lookup table
+   contains up to 256 entries and produces up to 32 bits of output per entry.
+
+   E.g. 1bpp and 2bpp source data can be converted to 8bpp at a rate of four
+   pixels per table lookup (since 8*4 = 32 bit output width). 4bpp data can be
+   converted to 8bpp at a rate of two pixels per table lookup (since 4*2 = 8,
+   the maximum number of input bits), or converted to 8bpp with 2x upscaling at
+   the same rate.
+
+   Unfortunately using a lookup table isn't always the best solution (e.g.
+   simple 8bpp upscaling), so other algorithms may be added in the future. 
 */
 
 /*
@@ -27,15 +43,76 @@
     - Macro used to convert symbol name 'x' into an instance-specific version
       of the symbol. e.g.
       "#define PDD_Name(x) MyPDD_##x"
-   void PDD_Name(Host_ChangeMode)(ARMul_State *state,int width,int height,int depth,int hz)
-    - Function that gets called when the display mode needs changing.
-   void PDD_Name(Host_SetPaletteEntry)(ARMul_State *state,int i,unsigned int phys)
-    - Function that gets called when a palette entry needs updating
-   ARMword *PDD_Name(Host_GetRow)(ARMul_State *state,int row,int offset,int *outoffset)
-    - Function that gets called to get a pointer to a row.
-    - The returned pointer must be ARMword-aligned, and offset must be the bit offset to start rendering at (0-31)
+
+   PDD_FrameSkip
+    - Reload value for the frameskip counter. 0 disables frameskip.
+    - Note that this also affects the rate at which Host_PollDisplay is called.
+
    void PDD_Name(Host_PollDisplay)(ARMul_State *state)
     - Function that gets called after rendering each frame
+
+   void PDD_Name(Host_ChangeMode)(ARMul_State *state,int width,int height,
+                                  int depth,int hz)
+    - Function that gets called when the display mode needs changing.
+    - 'Depth' is the log2 of the BPP
+    - The implementation must change to the most appropriate display mode
+      available and fill in the Width, Height, XScale and YScale members of the
+      HostDisplay struct to reflect the new display parameters.
+    - It must also fill in ExpandTable & ExpandFactor if BPP conversion or
+      horizontal upscaling is required
+    - Currently, failure to find a suitable mode isn't supported - however it
+      shouldn't be too hard to keep the screen blanked (not ideal) by keeping
+      DC.ModeChanged set to 1
+
+   void PDD_Name(Host_SetPaletteEntry)(ARMul_State *state,int i,
+                                       unsigned int phys)
+    - Function that gets called when a palette entry needs updating
+    - 'phys' is a 13-bit VIDC physical colour
+
+   void PDD_Name(Host_SetBorderColour)(ARMul_State *state,unsigned int phys)
+    - Function that gets called when the border colour needs updating
+    - 'phys' is a 13-bit VIDC physical colour
+
+   void PDD_Name(Host_DrawBorderRect)(ARMul_State *state,int x,int y,int width,
+                                      int height)
+    - Function that should fill an area of the display with the border colour
+
+   PDD_Row
+    - A data type that acts as an interator/accessor for a screen row.
+
+   PDD_Row PDD_Name(Host_BeginRow)(ARMul_State *state,int row,int offset,
+                                   int *alignment)
+    - Function to return a PDD_Row instance suitable for accessing the indicated
+      row, starting from the given X offset (in host pixels)
+    - 'alignment' must be equivalent to the 'outoffset' value that will be
+      returned by the first call to Host_BeginUpdate. I.e. the bit offset at
+      which the first pixel will start at within the area being accessed.
+
+   void PDD_Name(Host_EndRow)(ARMul_State *state,PDD_Row *row)
+    - Function to end the use of a PDD_Row
+    - Where a PDD_Row has been copied via pass-by-value, currently only the
+      original instance will have Host_EndRow called on it.
+
+   ARMword *PDD_Name(Host_BeginUpdate)(ARMul_State *state,PDD_Row *row,
+                                       unsigned int count,int *outoffset)
+    - Function called when the driver is about to write to 'count' bits of the
+      row.
+    - 'count' will always be a multiple of 1<<(DC.LastHostDepth+HD.ExpandFactor)
+    - The returned pointer must be an ARMword-aligned pointer to the row data
+    - outoffset must be used to return the bit offset within the data at which
+      to start rendering.  
+    - outoffset must be aligned to a host pixel boundary, i.e. multiple of
+      1 << (DC.LastHostDepth + HD.ExpandFactor)
+
+   void PDD_Name(Host_EndUpdate)(ARMul_State *state,PDD_Row *row)
+    - End updating the region of the row
+
+   void PDD_Name(Host_AdvanceRow)(ARMul_State *state,PDD_Row *row,
+                                  unsigned int count)
+    - Advance the row pointer by 'count' bits
+
+   PDD_DisplayDev
+    - The name to use for the const DisplayDev struct that will be generated
 
 */
 
@@ -71,6 +148,7 @@ struct PDD_Name(DisplayInfo) {
     int BitWidth; /* Width of display area, in bits */
     unsigned int VIDC_CR; /* Control register value in use for this frame */
     unsigned int Vptr; /* DMA pointer, in bits, as offset from start of phys RAM */
+    int FrameSkip; /* Current frame skip counter */
   } Control;
 
   struct {
@@ -135,7 +213,7 @@ struct PDD_Name(DisplayInfo) {
 
 */
 
-static inline int PDD_Name(RowFunc1XSameBitAligned)(ARMul_State *state,ARMword *out,int outoffset,int flags)
+static inline int PDD_Name(RowFunc1XSameBitAligned)(ARMul_State *state,PDD_Row drow,int flags)
 {
   unsigned int Vptr = DC.Vptr;
   unsigned int Vstart = MEMC.Vstart<<7;
@@ -159,11 +237,12 @@ static inline int PDD_Name(RowFunc1XSameBitAligned)(ARMul_State *state,ARMword *
     {
       flags |= ROWFUNC_UPDATED;
       /* Process the pixels in this region, stopping at end of row/update block/Vend */
+      int outoffset;
+      ARMword *out = PDD_Name(Host_BeginUpdate)(state,&drow,Available,&outoffset);
       BitCopy(out,outoffset,RAM+(Vptr>>5),Vptr&0x1f,Available);
+      PDD_Name(Host_EndUpdate)(state,&drow);
     }
-    outoffset += Available;
-    out += outoffset>>5;
-    outoffset &= 0x1f;
+    PDD_Name(Host_AdvanceRow)(state,&drow,Available);
     Vptr += Available;
     Remaining -= Available;
     if(Vptr >= Vend)
@@ -175,14 +254,13 @@ static inline int PDD_Name(RowFunc1XSameBitAligned)(ARMul_State *state,ARMword *
   return (flags & ROWFUNC_UPDATED);
 }
 
-static inline int PDD_Name(RowFunc1XSameByteAligned)(ARMul_State *state,ARMword *outwords,int outoffset,int flags)
+static inline int PDD_Name(RowFunc1XSameByteAligned)(ARMul_State *state,PDD_Row drow,int flags)
 {
   unsigned int Vptr = DC.Vptr>>3;
   unsigned int Vstart = MEMC.Vstart<<4;
   unsigned int Vend = (MEMC.Vend+1)<<4; /* Point to pixel after end */
   const char *RAM = (char *) MEMC.PhysRam;
   int Remaining = DC.BitWidth>>3;
-  char *out = ((char *)outwords)+(outoffset>>3);
 
   /* Sanity checks to avoid looping forever */
   if((Vptr >= Vend) || (Vstart >= Vend))
@@ -200,9 +278,12 @@ static inline int PDD_Name(RowFunc1XSameByteAligned)(ARMul_State *state,ARMword 
     {
       flags |= ROWFUNC_UPDATED;
       /* Process the pixels in this region, stopping at end of row/update block/Vend */
-      memcpy(out,RAM+Vptr,Available);
+      int outoffset;
+      ARMword *out = PDD_Name(Host_BeginUpdate)(state,&drow,Available<<3,&outoffset);
+      memcpy(((char *)out)+(outoffset>>3),RAM+Vptr,Available);
+      PDD_Name(Host_EndUpdate)(state,&drow);
     }
-    out += Available;
+    PDD_Name(Host_AdvanceRow)(state,&drow,Available<<3);
     Vptr += Available;
     Remaining -= Available;
     if(Vptr >= Vend)
@@ -220,7 +301,7 @@ static inline int PDD_Name(RowFunc1XSameByteAligned)(ARMul_State *state,ARMword 
 
 */
 
-static inline int PDD_Name(RowFuncExpandTable)(ARMul_State *state,ARMword *out,int outoffset,int flags)
+static inline int PDD_Name(RowFuncExpandTable)(ARMul_State *state,PDD_Row drow,int flags)
 {
   unsigned int Vptr = DC.Vptr;
   unsigned int Vstart = MEMC.Vstart<<7;
@@ -244,11 +325,12 @@ static inline int PDD_Name(RowFuncExpandTable)(ARMul_State *state,ARMword *out,i
     {
       flags |= ROWFUNC_UPDATED;
       /* Process the pixels in this region, stopping at end of row/update block/Vend */
+      int outoffset;
+      ARMword *out = PDD_Name(Host_BeginUpdate)(state,&drow,Available<<HD.ExpandFactor,&outoffset);
       BitCopyExpand(out,outoffset,RAM+(Vptr>>5),Vptr&0x1f,Available,HD.ExpandTable,1<<DC.LastHostDepth,HD.ExpandFactor);
+      PDD_Name(Host_EndUpdate)(state,&drow);
     }
-    outoffset += Available<<HD.ExpandFactor;
-    out += outoffset>>5;
-    outoffset &= 0x1f;
+    PDD_Name(Host_AdvanceRow)(state,&drow,Available<<HD.ExpandFactor);
     Vptr += Available;
     Remaining -= Available;
     if(Vptr >= Vend)
@@ -292,6 +374,13 @@ static void PDD_Name(EventFunc)(ARMul_State *state,CycleCount nowtime)
   /* Trigger VSync interrupt */
   ioc.IRQStatus|=IRQA_VFLYBK;
   IO_UpdateNirq(state);
+
+  /* Handle frame skip */
+  if(DC.FrameSkip--)
+  {
+    return;
+  }
+  DC.FrameSkip = PDD_FrameSkip;
 
   /* Ensure mode changes if pixel clock changed */
   DC.ModeChanged |= (DC.VIDC_CR & 3) != (NewCR & 3);
@@ -411,7 +500,7 @@ static void PDD_Name(EventFunc)(ARMul_State *state,CycleCount nowtime)
     int i;
     int flags = (DC.ForceRefresh?ROWFUNC_FORCE:0);
 
-    /* We can test these values once here, so that it's only outoffset alignment
+    /* We can test these values once here, so that it's only output alignment
        that we need to worry about during the loop */
     if((DC.Vptr & 0x7) || ((Width*BPP)&0x7))
       flags |= ROWFUNC_UNALIGNED;
@@ -428,21 +517,22 @@ static void PDD_Name(EventFunc)(ARMul_State *state,CycleCount nowtime)
       while(hoststart < hostend)
       {
         DC.Vptr = Vptr;
-        int outoffset;
+        int alignment;
         int updated;
-        ARMword *out = PDD_Name(Host_GetRow)(state,hoststart++,HD.XOffset,&outoffset);
+        PDD_Row hrow = PDD_Name(Host_BeginRow)(state,hoststart++,HD.XOffset,&alignment);
         if(HD.ExpandTable)
         {
-          updated = PDD_Name(RowFuncExpandTable)(state,out,outoffset,flags);
+          updated = PDD_Name(RowFuncExpandTable)(state,hrow,flags);
         }
-        else if(!(flags & ROWFUNC_UNALIGNED) && !(outoffset & 0x7))
+        else if(!(flags & ROWFUNC_UNALIGNED) && !(alignment & 0x7))
         {
-          updated = PDD_Name(RowFunc1XSameByteAligned)(state,out,outoffset,flags);
+          updated = PDD_Name(RowFunc1XSameByteAligned)(state,hrow,flags);
         }
         else
         {
-          updated = PDD_Name(RowFunc1XSameBitAligned)(state,out,outoffset,flags);
+          updated = PDD_Name(RowFunc1XSameBitAligned)(state,hrow,flags);
         }
+        PDD_Name(Host_EndRow)(state,&hrow);
         if(updated)
           flags |= ROWFUNC_UPDATED;
         else
