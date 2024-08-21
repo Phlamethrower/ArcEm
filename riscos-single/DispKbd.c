@@ -646,7 +646,7 @@ DisplayDev_Init(ARMul_State *state)
   atexit(restorebreak);
 
   return DisplayDev_Set(state,displays[hArcemConfig.eDisplayDriver]);
-} /* DisplayKbd_InitHost */
+} /* DisplayDev_Init */
 
 
 /*-----------------------------------------------------------------------------*/

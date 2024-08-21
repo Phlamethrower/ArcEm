@@ -11,6 +11,8 @@
 #include "platform.h"
 #include "../arch/Version.h"
 #include "arexx.h"
+#include "../armemu.h"
+#include "arch/displaydev.h"
 
 #include <intuition/pointerclass.h>
 #include <dos/dostags.h>
