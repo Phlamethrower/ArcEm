@@ -91,7 +91,7 @@ SRCS = armcopro.c armemu.c arminit.c arch/armarc.c \
 	$(SYSTEM)/DispKbd.c arch/i2c.c arch/archio.c \
 	arch/fdc1772.c $(SYSTEM)/ControlPane.c arch/hdc63463.c \
 	arch/ReadConfig.c arch/keyboard.c $(SYSTEM)/filecalls.c \
-	arch/DispKbdShared.c arch/ArcemConfig.c arch/cp15.c
+	arch/DispKbdShared.c arch/ArcemConfig.c arch/cp15.c arch/newsound.c
 
 INCS = armdefs.h armemu.h $(SYSTEM)/KeyTable.h \
   arch/i2c.h arch/archio.h arch/fdc1772.h arch/ControlPane.h \
@@ -152,7 +152,7 @@ CFLAGS += -mno-poke-function-name
 # Debug options
 CFLAGS += -save-temps -mpoke-function-name
 # Profiling
-CFLAGS += -mpoke-function-name -DPROFILE_ENABLED
+#CFLAGS += -mpoke-function-name -DPROFILE_ENABLED
 OBJS += prof.o
 TARGET=!ArcEm/arcem
 endif
@@ -176,7 +176,7 @@ endif
 
 ifeq (${SOUND_SUPPORT},yes)
 CFLAGS += -DSOUND_SUPPORT
-OBJS += $(SYSTEM)/sound.o
+OBJS += $(SYSTEM)/sound.o arch/newsound.o
 INCS += arch/sound.h
 ifeq (${SOUND_PTHREAD},yes)
 LIBS += -lpthread
@@ -304,6 +304,9 @@ arch/ReadConfig.o: arch/ReadConfig.c arch/ReadConfig.h arch/DispKbd.h \
 
 arch/keyboard.o: arch/keyboard.c arch/keyboard.h
 	$(CC) $(CFLAGS) -c $*.c -o arch/keyboard.o
+
+arch/newsound.o: arch/newsound.c arch/sound.h
+	$(CC) $(CFLAGS) -c $*.c -o arch/newsound.o
 
 win/gui.o: win/gui.rc win/gui.h win/arc.ico
 	windres $*.rc -o win/gui.o

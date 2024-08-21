@@ -11,7 +11,7 @@
 /* It's actually decremented once every POLLGAP - that is called
    with the ARMul scheduler */
 
-#define AUTOREFRESHPOLL 2500
+#define AUTOREFRESHPOLL 700 /* About 60fps on an Iyonix */
 
 #include <stdio.h>
 #include <limits.h>
@@ -738,7 +738,7 @@ void VIDC_PutVal(ARMul_State *state,ARMword address, ARMword data,int bNw) {
 #endif
       VIDC.StereoImageReg[(addr==0x60)?7:((addr-0x64)/4)]=val & 7;
 #ifdef SOUND_SUPPORT
-      SoundUpdateStereoImage(state);
+      Sound_StereoUpdated(state);
 #endif
       break;
 
@@ -879,7 +879,7 @@ void VIDC_PutVal(ARMul_State *state,ARMword address, ARMword data,int bNw) {
 #endif
       VIDC.SoundFreq=val & 0xff;
 #ifdef SOUND_SUPPORT
-      SoundUpdateSampleRate(state);
+      Sound_SoundFreqUpdated(state);
 #endif
       break;
 

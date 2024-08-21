@@ -58,7 +58,7 @@ mainloop:
 	AND R8,R4,R6 @ Pos to read from
 	LDR R10,[R1] @ dest data
 	LDR R9,[R0,R8,LSL #1] @ Get input pair
-	ADD R10,R10,R9,ROR #16 @ Mix in with stereo swap
+	ADD R10,R10,R9 @ Mix in (no overflow checks!)
 	STR R10,[R1],#4
 	ADD R7,R7,R5 @ Increment fraction accumulator
 	MOV R10,R7,LSR #24 @ Get any whole movements
