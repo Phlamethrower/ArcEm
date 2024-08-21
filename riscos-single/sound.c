@@ -182,9 +182,6 @@ int Sound_InitHost(ARMul_State *state)
      We'll receive a max of 8*16*2=256 samples */
   Sound_BatchSize = 8;
 
-  /* Set our max desired rate to be equal to the current sound system rate */
-  Sound_MaxDesiredRate = _swi(SharedSound_SampleRate,_INR(0,1)|_RETURN(1),sound_handler_id,0);
-
   return 0;
 }
 

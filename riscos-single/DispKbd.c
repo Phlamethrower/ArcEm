@@ -576,8 +576,8 @@ static void Host_PollDisplay_Common(ARMul_State *state,const DisplayParams *para
 #if 0
       printf("\x1e%.2fMHz %dx%d %dHz %dbpp %d:%d %dfps   \n",mhz,(VIDC.Horiz_DisplayEnd-VIDC.Horiz_DisplayStart)*2,VIDC.Vert_DisplayEnd-VIDC.Vert_DisplayStart,current_hz,1<<((VIDC.ControlReg>>2)&3),params->XScale,params->YScale,fps);
 #else
-      extern unsigned int log2downmix,log2numchan;
-      printf("\x1e%x%x%x%x%x%x%x%x %d -> chan %d down %d   \n",VIDC.StereoImageReg[0],VIDC.StereoImageReg[1],VIDC.StereoImageReg[2],VIDC.StereoImageReg[3],VIDC.StereoImageReg[4],VIDC.StereoImageReg[5],VIDC.StereoImageReg[6],VIDC.StereoImageReg[7],VIDC.SoundFreq,log2numchan,log2downmix);
+      extern unsigned int log2numchan;
+      printf("\x1e%x%x%x%x%x%x%x%x %d -> chan %d fudge %d   \n",VIDC.StereoImageReg[0],VIDC.StereoImageReg[1],VIDC.StereoImageReg[2],VIDC.StereoImageReg[3],VIDC.StereoImageReg[4],VIDC.StereoImageReg[5],VIDC.StereoImageReg[6],VIDC.StereoImageReg[7],VIDC.SoundFreq,log2numchan,Sound_FudgeRate);
 #endif
       oldcycles = ARMul_Time;
       oldtime = nowtime2;
