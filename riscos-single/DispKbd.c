@@ -93,6 +93,7 @@ static const ARMword ModeVarsIn[] = {
 static ARMword ModeVarsOut[7];
 
 static int CursorXOffset=0; /* How many columns were skipped from the left edge of the cursor image */
+static int CursorYOffset=0; /* How many rows were skipped from the top of the cursor image */
 
 static int ChangeMode(const HostMode *mode,int depth)
 {
@@ -428,6 +429,7 @@ static void UpdateCursorPos(ARMul_State *state,const DisplayParams *params) {
   DisplayDev_GetCursorPos(state,&internal_x,&internal_y);
   /* Convert to our screen space */
   internal_x+=CursorXOffset;
+  internal_y+=CursorYOffset;
   internal_x=internal_x*params->XScale+params->XOffset;
   internal_y=internal_y*params->YScale+params->YOffset;
 
@@ -456,19 +458,36 @@ static void RefreshMouse(ARMul_State *state,const DisplayParams *params) {
 
   height = VIDC.Vert_CursorEnd - VIDC.Vert_CursorStart;
 
-  if(height && (height <= 16) && (params->YScale >= 2))
+  CursorYOffset = 0;
+  if(height && (height <= 32) && (params->YScale >= 2))
   {
-    /* line-double the cursor image */
-    static ARMword double_data[2*32];
-    int i;
-    for(i=0;i<height;i++)
+    /* Skip any blank rows at the start & end to enable better line doubling */
+    while(height && !pointer_data[0] && !pointer_data[1])
     {
-      double_data[i*4+0] = double_data[i*4+2] = pointer_data[i*2];
-      double_data[i*4+1] = double_data[i*4+3] = pointer_data[i*2+1];
+      height--;
+      pointer_data += 2;
+      CursorYOffset++;
     }
-    height *= 2;
-    pointer_data = double_data;
+    while(height && !pointer_data[height*2-1] && !pointer_data[height*2-2])
+    {
+      height--;
+    }
+    
+    if(height && (height <= 16))
+    {
+      /* line-double the cursor image */
+      static ARMword double_data[2*32];
+      int i;
+      for(i=0;i<height;i++)
+      {
+        double_data[i*4+0] = double_data[i*4+2] = pointer_data[i*2];
+        double_data[i*4+1] = double_data[i*4+3] = pointer_data[i*2+1];
+      }
+      height *= 2;
+      pointer_data = double_data;
+    }
   }
+  
   CursorXOffset = 0;
   if(height && (height <= 32) && (params->XScale >= 2))
   {
@@ -479,7 +498,7 @@ static void RefreshMouse(ARMul_State *state,const DisplayParams *params) {
     char *dest = (char *) double_data;
     /* RISC OS tends to store the image in the right half of the buffer, so shift the image left as far as possible to avoid losing any columns
        Note that we're only doing it 4 columns at a time here to keep the code simple */
-    for(CursorXOffset=0;CursorXOffset<16;CursorXOffset += 4)
+    for(;CursorXOffset<16;CursorXOffset += 4)
     {
       for(y=0;y<height;y++)
         if(src[y*8])
