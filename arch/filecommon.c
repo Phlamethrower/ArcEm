@@ -268,7 +268,7 @@ size_t File_ReadRAM(FILE *pFile,ARMword uAddress,size_t uCount)
 
   while(uCount > 0)
   {
-    size_t amt = MIN(4096-(uAddress&4093),uCount);
+    size_t amt = MIN(4096-(uAddress&4095),uCount);
 
     uAddress &= 0x3ffffff;
 
@@ -392,7 +392,7 @@ size_t File_WriteRAM(FILE *pFile,ARMword uAddress,size_t uCount)
 
   while(uCount > 0)
   {
-    size_t amt = MIN(4096-(uAddress&4093),uCount);
+    size_t amt = MIN(4096-(uAddress&4095),uCount);
 
     uAddress &= 0x3ffffff;
 

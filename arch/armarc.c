@@ -286,7 +286,7 @@ ARMul_MemoryInit(ARMul_State *state)
   /* Find the rom file size */
   fseek(ROMFile, 0l, SEEK_END);
 
-  MEMC.ROMHighSize = (((ARMword) ftell(ROMFile))+4093)&~4093;
+  MEMC.ROMHighSize = (((ARMword) ftell(ROMFile))+4095)&~4095;
   MEMC.ROMHighMask = MEMC.ROMHighSize-1;
 
   if(MEMC.ROMHighSize & MEMC.ROMHighMask) {
@@ -298,7 +298,7 @@ ARMul_MemoryInit(ARMul_State *state)
 
 #if defined(EXTNROM_SUPPORT)
   /* Add the space required by an Extension Rom */
-  extnrom_size = (extnrom_calculate_size(&extnrom_entry_count)+4093)&~4093;
+  extnrom_size = (extnrom_calculate_size(&extnrom_entry_count)+4095)&~4095;
   fprintf(stderr, "extnrom_size = %u, extnrom_entry_count= %u\n",
           extnrom_size, extnrom_entry_count);
 #endif /* EXTNROM_SUPPORT */
