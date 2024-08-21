@@ -1,31 +1,21 @@
 /* ################################################################################## */
 /* ## Individual decoded instruction functions                                     ## */
 /* ################################################################################## */
-static void EMFUNCDECL26(BranchForward) (ARMul_State *state, ARMword instr, ARMword pc) {
+static void EMFUNCDECL26(Branch) (ARMul_State *state, ARMword instr, ARMword pc) {
   EMFUNC_CONDTEST
-  SETPC(pc + 8 + POSBRANCH);
+  /* Note that the upper bits of instr (those that don't form the branch offset) get masked out by SETPC */
+  SETPC(pc + 8 + (instr<<2));
   FLUSHPIPE;
-} /* EMFUNCDECL26(BranchForward */
+} /* EMFUNCDECL26(Branch */
 
-static void EMFUNCDECL26(BranchForwardLink) (ARMul_State *state, ARMword instr, ARMword pc) {
+static void EMFUNCDECL26(BranchLink) (ARMul_State *state, ARMword instr, ARMword pc) {
   EMFUNC_CONDTEST
-  state->Reg[14] = (pc + 4) | R15CCINTMODE; /* put PC into Link */
-  SETPC(pc + 8 + POSBRANCH);
+  if(instr & (1<<24))
+    state->Reg[14] = (pc + 4) | R15CCINTMODE;
+  /* Note that the upper bits of instr (those that don't form the branch offset) get masked out by SETPC */
+  SETPC(pc + 8 + (instr<<2));
   FLUSHPIPE;
-} /* EMFUNCDECL26(BranchForwardLink */
-
-static void EMFUNCDECL26(BranchBackward) (ARMul_State *state, ARMword instr, ARMword pc) {
-  EMFUNC_CONDTEST
-  SETPC(pc + 8 + NEGBRANCH);
-  FLUSHPIPE;
-} /* EMFUNCDECL26(BranchBackward */
-
-static void EMFUNCDECL26(BranchBackwardLink) (ARMul_State *state, ARMword instr, ARMword pc) {
-  EMFUNC_CONDTEST
-  state->Reg[14] = (pc + 4) | R15CCINTMODE; /* put PC into Link */
-  SETPC(pc + 8 + NEGBRANCH);
-  FLUSHPIPE;
-} /* EMFUNCDECL26(BranchBackwardLink */
+} /* EMFUNCDECL26(BranchLink */
 
 static void EMFUNCDECL26(AndRegMul) (ARMul_State *state, ARMword instr, ARMword pc) {
   register ARMword dest,temp;

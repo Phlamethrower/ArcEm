@@ -125,11 +125,11 @@
       break;
 
       case 0xa:
-      f = (instr & (1 << 23)) ? EMFUNCDECL26(BranchBackward) : EMFUNCDECL26(BranchForward);
+      f = EMFUNCDECL26(Branch);
       break;
 
       case 0xb:
-      f = (instr & (1 << 23)) ? EMFUNCDECL26(BranchBackwardLink) : EMFUNCDECL26(BranchForwardLink);
+      f = EMFUNCDECL26(BranchLink);
       break;
 
       case 0xc:
