@@ -39,7 +39,7 @@ HOST_BIGENDIAN=no
 
 # Windowing System
 ifeq ($(SYSTEM),)
-SYSTEM=X
+SYSTEM=riscos-single
 endif
 
 CC=gcc
@@ -138,6 +138,7 @@ ifeq (${SYSTEM},riscos-single)
 EXTNROM_SUPPORT=notyet
 DIRECT_DISPLAY=yes
 CFLAGS += -I@ -DSYSTEM_riscos_single -Iriscos-single -mpoke-function-name -mtune=xscale -march=armv5te -mthrowback
+LDFLAGS += -static
 #OBJS += arm-support.o rhs.o
 TARGET=!ArcEm/arcem
 endif

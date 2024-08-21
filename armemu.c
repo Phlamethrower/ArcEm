@@ -19,6 +19,7 @@
     (arcem@treblig.org) */
 #include "armdefs.h"
 #include "armemu.h"
+#include <time.h>
 
 ARMul_State statestr;
 
