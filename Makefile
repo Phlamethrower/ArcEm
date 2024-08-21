@@ -140,6 +140,7 @@ DIRECT_DISPLAY=yes
 CFLAGS += -I@ -DSYSTEM_riscos_single -Iriscos-single -mpoke-function-name -mtune=xscale -march=armv5te -mthrowback -save-temps
 LDFLAGS += -static
 #OBJS += arm-support.o rhs.o
+OBJS += prof.o
 TARGET=!ArcEm/arcem
 endif
 
@@ -247,6 +248,9 @@ arm-support.o: arm-support.s instructions
 
 rhs.o: rhs.s
 	$(CC) rhs.s -c
+
+prof.o: prof.s
+	$(CC) -x assembler-with-cpp prof.s -c
 
 instructions: armsuppmov.s armsuppmovs.s armsuppmvn.s armsuppmvns.s
 
