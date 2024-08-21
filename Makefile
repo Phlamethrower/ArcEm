@@ -125,7 +125,6 @@ endif
 ifeq (${SYSTEM},riscos-single)
 # HostFS
 HOSTFS_SUPPORT=yes
-HOSTFS_OBJS = riscos-single/hostfs.o
 # Sound
 SOUND_SUPPORT=yes
 SOUND_PTHREAD=no

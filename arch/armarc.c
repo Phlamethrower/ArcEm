@@ -16,6 +16,7 @@
 #include <math.h>
 
 #include "../armdefs.h"
+#include "../hostfs.h"
 
 #include "dbugsys.h"
 
@@ -370,6 +371,10 @@ ARMul_MemoryInit(ARMul_State *state)
 
   ARMul_RebuildFastMap();
   FastMap_RebuildMapMode(state);
+
+#ifdef HOSTFS_SUPPORT
+  hostfs_init();
+#endif
 
   return(TRUE);
 }
