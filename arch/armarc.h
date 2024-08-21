@@ -54,6 +54,8 @@ struct MEMCStruct {
                      hasn't done an access to ROM space, so in 1 & 2 accesses
                      to  low mem access ROM */
 
+  ARMword DRAMPageSize; /* Page size we pretend our DRAM is */ 
+
   unsigned int UpdateFlags[(512*1024)/UPDATEBLOCKSIZE]; /* One flag for
                                                            each block of DMAble RAM
                                                            incremented on a write */

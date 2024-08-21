@@ -50,6 +50,8 @@ struct MEMCStruct memc;
 
 static void ARMul_RebuildFastMap(void);
 
+static ARMword ARMul_ManglePhysAddr(ARMword phy);
+
 /*------------------------------------------------------------------------------*/
 /* OK - this is getting treated as an odds/sods engine - just hook up anything
    you need to do occasionally! */
@@ -121,7 +123,7 @@ static void DumpHandler(int sig) {
     int pt = MEMC.PageTable[idx];
     if(pt>0)
     {
-      ARMword logadr,phys;
+      ARMword logadr,phys,mangle;
       /* Assume MEMC isn't in OS mode */
       static const char *prot[4] = {"USR R/W","USR R","SVC only","SVC only"};
       switch(MEMC.PageSizeFlags) {
@@ -147,7 +149,8 @@ static void DumpHandler(int sig) {
           break;
       }
       phys *= size;
-      fprintf(stderr,"log %08x -> phy %08x prot %s\n",logadr,phys,prot[(pt>>8)&3]);
+      mangle = ARMul_ManglePhysAddr(phys);
+      fprintf(stderr,"log %08x -> phy %08x (pre-mangle %08x) prot %s\n",logadr,mangle,phys,prot[(pt>>8)&3]);
     }
   }
 
@@ -196,16 +199,31 @@ ARMul_MemoryInit(ARMul_State *state)
 #endif
   unsigned long initmemsize;
   
+  MEMC.DRAMPageSize = MEMC_PAGESIZE_3_32K;
   switch(hArcemConfig.eMemSize) {
     case MemSize_256K:
+#if 0
+      initmemsize = 256 * 1024;
+      MEMC.DRAMPageSize = MEMC_PAGESIZE_O_4K;
+      break;
+#else
+      fprintf(stderr, "256K memory size may not be working right. Rounding up to 512K\n");
+      /* fall through... */
+#endif
+      
     case MemSize_512K:
+      initmemsize = 512 * 1024;
+      MEMC.DRAMPageSize = MEMC_PAGESIZE_O_4K;
+      break;
+
     case MemSize_1M:
-      fprintf(stderr, "256K, 512K and 1M memory size not yet supported, rounding up to 2M\n");
-      initmemsize = 2 * 1024 * 1024;
+      initmemsize = 1 * 1024 * 1024;
+      MEMC.DRAMPageSize = MEMC_PAGESIZE_1_8K;
       break;
 
     case MemSize_2M:
       initmemsize = 2 * 1024 * 1024;
+      MEMC.DRAMPageSize = MEMC_PAGESIZE_2_16K;
       break;
 
     case MemSize_4M:
@@ -246,7 +264,7 @@ ARMul_MemoryInit(ARMul_State *state)
   MEMC.NextSoundBufferValid = 0; /* Not set till Sstart and SendN have been written */
 
   MEMC.RAMSize = initmemsize;
-  MEMC.RAMMask = initmemsize-1;
+  MEMC.RAMMask = (initmemsize-1) & (4*1024*1024-1); /* Mask within a 4M MEMC bank */
 
 #ifdef MACOSX
   {
@@ -289,8 +307,9 @@ ARMul_MemoryInit(ARMul_State *state)
        (MEMC.ROMHighSize + extnrom_size) / 1024);
 
   /* Now allocate ROMs & RAM in one chunk */
-  MEMC.ROMRAMChunk = calloc(MEMC.RAMSize+MEMC.ROMHighSize+extnrom_size+256,1);
-  MEMC.EmuFuncChunk = calloc(MEMC.RAMSize+MEMC.ROMHighSize+extnrom_size+256,1);
+  ARMword RAMChunkSize = MAX(MEMC.RAMSize,512*1024); /* Ensure at least 512K RAM allocated to avoid any issues caused by DMA pointers going out of range */
+  MEMC.ROMRAMChunk = calloc(RAMChunkSize+MEMC.ROMHighSize+extnrom_size+256,1);
+  MEMC.EmuFuncChunk = calloc(RAMChunkSize+MEMC.ROMHighSize+extnrom_size+256,1);
   if((MEMC.ROMRAMChunk == NULL) || (MEMC.EmuFuncChunk == NULL)) {
     fprintf(stderr,"Couldn't allocate ROMRAMChunk/EmuFuncChunk\n");
     exit(3);
@@ -298,7 +317,7 @@ ARMul_MemoryInit(ARMul_State *state)
   state->FastMapInstrFuncOfs = ((FastMapUInt)MEMC.EmuFuncChunk)-((FastMapUInt)MEMC.ROMRAMChunk);
   /* Get everything 256 byte aligned for FastMap to work */
   MEMC.PhysRam = (ARMword*) ((((FastMapUInt)MEMC.ROMRAMChunk)+255)&~255); /* RAM must come first for FastMap_LogRamFunc to work! */
-  MEMC.ROMHigh = MEMC.PhysRam + (MEMC.RAMSize>>2);
+  MEMC.ROMHigh = MEMC.PhysRam + (RAMChunkSize>>2);
 
   dbug(" Loading ROM....\n ");
 
@@ -382,6 +401,107 @@ void ARMul_MemoryExit(ARMul_State *state)
   free(state->Display);
 }
 
+static ARMword ARMul_ManglePhysAddr(ARMword phy)
+{
+  /* Emulate the different ways that MEMC converts physical addresses to
+     row & column addresses. We perform two mappings here: From the physical
+     address to row & column, via the current MEMC page size, and then from
+     the row & column back to a physical address, via our emulated DRAM page
+     size.
+
+     Assuming the OS detects the right amount of RAM, this will be a 1:1
+     mapping, allowing all our DMA operations (video, audio) to work the same
+     as before. But while the OS (in this case RISC OS) is doing its DRAM
+     detection it won't be a 1:1 mapping, but the mapping will be such that
+     when the OS tries an address that should be invalid it will generate an
+     invalid address here too.
+
+     Note that physical address bits 0-11, 14-18 & 22-23 don't get affected by
+     the mangling. This corresponds to row bits 0-7 and column bits 0-1, 4-8.
+     So all we need to do is calculate row bits 8,9 and column bits 2,3,9.
+  */
+
+  if(MEMC.PageSizeFlags != MEMC.DRAMPageSize)
+  {
+    ARMword r8=0,r9=0,c2=0,c3=0,c9=0;
+  
+    switch(MEMC.PageSizeFlags)
+    {
+    case MEMC_PAGESIZE_O_4K:
+      c2 = (phy>>12) & 1;
+      c3 = (phy>>13) & 1;
+      break;
+    case MEMC_PAGESIZE_1_8K:
+      r8 = (phy>>12) & 1;
+      c2 = (phy>>19) & 1;
+      c3 = (phy>>13) & 1;
+      break;
+    case MEMC_PAGESIZE_2_16K:
+      r8 = (phy>>12) & 1;
+      c2 = (phy>>19) & 1;
+      c3 = (phy>>13) & 1;
+      c9 = (phy>>20) & 1;
+      break;
+    case MEMC_PAGESIZE_3_32K:
+      r8 = (phy>>12) & 1;
+      r9 = (phy>>13) & 1;
+      c2 = (phy>>19) & 1;
+      c3 = (phy>>21) & 1;
+      c9 = (phy>>20) & 1;
+      break;
+    }
+  
+    phy &= 0xffc7cfff; /* Mask off the bits extracted above */
+  
+    /* Now translate back */
+  
+    ARMword b12=0,b13=0,b19=0,b20=0,b21=0;
+  
+    switch(MEMC.DRAMPageSize)
+    {
+    case MEMC_PAGESIZE_O_4K:
+      b12 = c2;
+      b13 = c3;
+      break;
+    case MEMC_PAGESIZE_1_8K:
+      b12 = r8;
+      b19 = c2;
+      b13 = c3;
+      break;
+    case MEMC_PAGESIZE_2_16K:
+      b12 = r8;
+      b19 = c2;
+      b13 = c3;
+      b20 = c9;
+      break;
+    case MEMC_PAGESIZE_3_32K:
+      b12 = r8;
+      b13 = r9;
+      b19 = c2;
+      b21 = c3;
+      b20 = c9;
+      break;
+    }
+
+    phy |= (b12<<12) | (b13<<13) | (b19<<19) | (b20<<20) | (b21<<21);
+  }
+
+  /* Mask by how much RAM is fitted
+     We use slightly funny masking logic to deal with the case of having 12M
+     RAM fitted (3 banks of 4M). Any banks outside the number which are fitted
+     will wrap back to bank 0.
+  */
+
+  ARMword bank = phy>>22;
+
+  phy &= MEMC.RAMMask;
+
+  if(bank >= MEMC.RAMSize>>22)
+    bank = 0;
+
+  return phy | (bank<<22);
+}    
+
 static void FastMap_SetEntries(ARMword addr,ARMword *data,FastMapAccessFunc func,FastMapUInt flags,ARMword size)
 {
   FastMapEntry *entry = FastMap_GetEntryNoWrap(&statestr,addr);
@@ -445,8 +565,9 @@ static void ARMul_PurgeFastMapPTIdx(ARMword idx)
         mask = 0x7f8c00;
         break;
     }
-    ARMword size=1<<(12+MEMC.PageSizeFlags);
-    phys *= size;
+    ARMword size=12+MEMC.PageSizeFlags;
+    phys = ARMul_ManglePhysAddr(phys<<size);
+    size = 1<<size;
     FastMapEntry *entry = FastMap_GetEntryNoWrap(&statestr,logadr);
     
     /* To cope with multiply mapped pages (i.e. multiple physical pages mapping to the same logical page) we need to check if the page we're about to unmap is still owned by us
@@ -548,8 +669,9 @@ static void ARMul_RebuildFastMapPTIdx(ARMword idx)
               | ((pt & 0x000c00)<<13);
         break;
     }
-    ARMword size=1<<(12+MEMC.PageSizeFlags);
-    phys *= size;
+    ARMword size=12+MEMC.PageSizeFlags;
+    phys = ARMul_ManglePhysAddr(phys<<size);
+    size = 1<<size;
     ARMword flags = PPL_To_Flags[(pt>>8)&3];
     if(phys<512*1024)
     {
@@ -676,7 +798,7 @@ static ARMword FastMap_ROMMap1Func(ARMul_State *state, ARMword addr,ARMword data
   return data;
 }
 
-static ARMword FastMap_PhysRamFunc(ARMul_State *state, ARMword addr,ARMword data,ARMword flags)
+static ARMword FastMap_PhysRamFuncROMMap2(ARMul_State *state, ARMword addr,ARMword data,ARMword flags)
 {
   /* Read/write from phys RAM, switching to ROMMapFlag 0 if necessary */
   if(MEMC.ROMMapFlag == 2)
@@ -684,10 +806,7 @@ static ARMword FastMap_PhysRamFunc(ARMul_State *state, ARMword addr,ARMword data
     MEMC.ROMMapFlag = 0;
     ARMul_RebuildFastMap();
   }
-  addr -= MEMORY_0x2000000_RAM_PHYS;
-  if(addr >= MEMC.RAMSize)
-    return 0;
-  ARMword *phy = &MEMC.PhysRam[addr>>2];
+  ARMword *phy = FastMap_Log2Phy(FastMap_GetEntry(state,addr),addr&~3);
   switch(flags & (FASTMAP_ACCESSFUNC_WRITE|FASTMAP_ACCESSFUNC_BYTE))
   {
   case 0:
@@ -711,15 +830,25 @@ static ARMword FastMap_PhysRamFunc(ARMul_State *state, ARMword addr,ARMword data
   }
 }
 
-static ARMword FastMap_DummyROMMap2Func(ARMul_State *state, ARMword addr,ARMword data,ARMword flags)
+static ARMword FastMap_PhysRamFunc(ARMul_State *state, ARMword addr,ARMword data,ARMword flags)
 {
-  /* Does nothing except switch to ROMMapFlag 0 if necessary */
-  if(MEMC.ROMMapFlag == 2)
+  /* Write to direct-mapped phys RAM. Address guaranteed to be valid. */
+  addr -= MEMORY_0x2000000_RAM_PHYS;
+  ARMword *phy = &MEMC.PhysRam[addr>>2];
+  ARMword orig = *phy;
+  if(flags & FASTMAP_ACCESSFUNC_BYTE)
   {
-    MEMC.ROMMapFlag = 0;
-    ARMul_RebuildFastMap();
+    ARMword shift = ((addr&3)<<3);
+    data = (data&0xff)<<shift;
+    data |= orig &~ (0xff<<shift);
   }
-  return 0;
+  if(orig != data)
+  {
+    *phy = data;
+    *(FastMap_Phy2Func(state,phy)) = FASTMAP_CLOBBEREDFUNC;
+    /* Update DMA flags */
+    FastMap_DMAAbleWrite(addr,data);
+  }
 }
 
 static ARMword FastMap_ConIOFunc(ARMul_State *state, ARMword addr,ARMword data,ARMword flags)
@@ -847,22 +976,35 @@ static void ARMul_RebuildFastMap(void)
   if(MEMC.ROMMapFlag == 2)
   {
     /* Use access func for all of it */
-    FastMap_SetEntries(MEMORY_0x2000000_RAM_PHYS,0,FastMap_PhysRamFunc,FASTMAP_R_SVC|FASTMAP_W_SVC|FASTMAP_R_FUNC|FASTMAP_W_FUNC,MEMC.RAMSize);
+    FastMap_SetEntries(MEMORY_0x2000000_RAM_PHYS,0,FastMap_PhysRamFuncROMMap2,FASTMAP_R_SVC|FASTMAP_W_SVC|FASTMAP_R_FUNC|FASTMAP_W_FUNC,16*1024*1024);
   }
   else
   {
-    /* Lower 512K must use access func for write */
-    ARMword low = (MEMC.RAMSize>512*1024?512*1024:MEMC.RAMSize);
-    FastMap_SetEntries(MEMORY_0x2000000_RAM_PHYS,MEMC.PhysRam,FastMap_PhysRamFunc,FASTMAP_R_SVC|FASTMAP_W_SVC|FASTMAP_W_FUNC,low);
-    if(low < MEMC.RAMSize)
+    for(i=0;i<16*1024*1024;i+=4096)
     {
-      /* Remainder can use direct access for read/write */
-      FastMap_SetEntries(MEMORY_0x2000000_RAM_PHYS+512*1024,MEMC.PhysRam+(512*1024>>2),0,FASTMAP_R_SVC|FASTMAP_W_SVC,MEMC.RAMSize-512*1024);
+      ARMword phy = ARMul_ManglePhysAddr(i);
+      if(phy < 512*1024)
+      {
+        /* Lower 512K must use access func for write
+           But we can use a fast function (for when the OS has correctly detected our RAM setup) or a slow one. */
+        if(i == phy)
+        {
+          /* Direct mapping, use fast func */
+          FastMap_SetEntries(MEMORY_0x2000000_RAM_PHYS+i,MEMC.PhysRam+(phy>>2),FastMap_PhysRamFunc,FASTMAP_R_SVC|FASTMAP_W_SVC|FASTMAP_W_FUNC,4096);
+        }
+        else
+        {
+          /* Indirect mapping, reuse LogRamFunc */
+          FastMap_SetEntries(MEMORY_0x2000000_RAM_PHYS+i,MEMC.PhysRam+(phy>>2),FastMap_LogRamFunc,FASTMAP_R_SVC|FASTMAP_W_SVC|FASTMAP_W_FUNC,4096);
+        }
+      }
+      else
+      {
+        /* Remainder can use direct access for read/write */
+        FastMap_SetEntries(MEMORY_0x2000000_RAM_PHYS+i,MEMC.PhysRam+(phy>>2),0,FASTMAP_R_SVC|FASTMAP_W_SVC,4096);
+      }
     }
   }
-  /* Unused RAM space doesn't do much */
-  if(MEMC.RAMSize < 16*1024*1024)
-    FastMap_SetEntries(MEMORY_0x2000000_RAM_PHYS+MEMC.RAMSize,0,FastMap_DummyROMMap2Func,FASTMAP_R_SVC|FASTMAP_W_SVC|FASTMAP_R_FUNC|FASTMAP_W_FUNC,16*1024*1024-MEMC.RAMSize);
 
   /* I/O space */
   FastMap_SetEntries(MEMORY_0x3000000_CON_IO,0,FastMap_ConIOFunc,FASTMAP_R_SVC|FASTMAP_W_SVC|FASTMAP_R_FUNC|FASTMAP_W_FUNC,0x400000);
