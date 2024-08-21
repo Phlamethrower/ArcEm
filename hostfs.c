@@ -68,10 +68,24 @@ int __riscosify_control = 0;
 
 #endif /* !__riscos__ */
 
-#include "arch/armarc.h"
 #include "hostfs.h"
+
+#ifdef HOSTFS_ARCEM
+
+#include "arch/armarc.h"
 #include "arch/ArcemConfig.h"
 #include "arch/filecalls.h"
+
+#define HOSTFS_ROOT hArcemConfig.sHostFSDirectory
+
+#else /* HOSTFS_ARCEM */
+
+#include "arm.h"
+#include "mem.h"
+
+static char HOSTFS_ROOT[512];
+
+#endif /* !HOSTFS_ARCEM */
 
 #define HOSTFS_PROTOCOL_VERSION	1
 
@@ -156,8 +170,6 @@ typedef struct {
 #define DEFAULT_ATTRIBUTES  0x03
 #define DEFAULT_FILE_TYPE   RISC_OS_FILE_TYPE_TEXT
 #define MINIMUM_BUFFER_SIZE 32768
-
-#define HOSTFS_ROOT hArcemConfig.sHostFSDirectory
 
 static FILE *open_file[MAX_OPEN_FILES + 1]; /* array subscript 0 is never used */
 
@@ -2067,7 +2079,18 @@ hostfs_register(ARMul_State *state)
 void
 hostfs_init(void)
 {
+#ifdef HOSTFS_ARCEM
   /* Do nothing for ArcEm */
+#else
+  int c;
+
+  append_filename(HOSTFS_ROOT, rpcemu_get_datadir(), "hostfs", 511);
+  for (c = 0; c < 511; c++) {
+    if (HOSTFS_ROOT[c] == '\\') {
+      HOSTFS_ROOT[c] = '/';
+    }
+  }
+#endif
 }
 
 /**

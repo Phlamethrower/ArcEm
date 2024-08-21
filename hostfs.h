@@ -17,6 +17,8 @@
 #define rpclog(...) fprintf(stderr,__VA_ARGS__)
 #define error(...) fprintf(stderr,__VA_ARGS__)
 
+#define HOSTFS_ARCEM /* Build ArcEm version, not RPCEmu */
+
 extern void hostfs(ARMul_State *state);
 extern void hostfs_init(void);
 extern void hostfs_reset(void);
