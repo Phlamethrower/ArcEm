@@ -1017,6 +1017,8 @@ PipelineEntry abortpipe = {
 
 #define PIPESIZE 4 /* 3 or 4. 4 seems to be slightly faster? */
 
+#define TIMING
+
 void
 ARMul_Emulate26(ARMul_State *state)
 {
@@ -1026,6 +1028,10 @@ ARMul_Emulate26(ARMul_State *state)
   /**************************************************************************\
    *                        Execute the next instruction                    *
   \**************************************************************************/
+#ifdef TIMING
+  clock_t start = clock();
+  int icount=50000000;
+#endif
   kill_emulator = 0;
   while (kill_emulator == 0) {
     if (state->NextInstr < PRIMEPIPE) {
@@ -1104,10 +1110,20 @@ ARMul_Emulate26(ARMul_State *state)
       if(ARMul_CCCheck(instr,ECC))
         (pipe[pipeidx].func)(state, instr, pc);
 
+      if(!--icount)
+      {
+        kill_emulator = 1;
+        break;
+      }
+
     } /* for loop */
 
     state->decoded = pipe[(pipeidx+1)%PIPESIZE].instr;
     state->loaded = pipe[(pipeidx+2)%PIPESIZE].instr;
     state->pc = pc;
   }
+#ifdef TIMING
+  int t = clock()-start;
+  printf("%d, %.3f MIPS\n",t,(50.0f*CLOCKS_PER_SEC)/t);
+#endif
 } /* Emulate 26 in instruction based mode */
