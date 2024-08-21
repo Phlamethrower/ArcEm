@@ -524,8 +524,14 @@ GetWord_IO(ARMul_State *state, ARMword address)
         break;
 
       case 5:
-        /*dbug_ioc("HDC read: address=0x%x speed=%d\n",address,speed); */
-        return HDC_Read(state, offset);
+        /* HDC reads should be medium speed, ignore all other speeds to avoid
+           confusion with IOEB registers */
+        if(speed == 1)
+        {
+          /*dbug_ioc("HDC read: address=0x%x speed=%d\n",address,speed); */
+          return HDC_Read(state, offset);
+        }
+        break;
 
       case 6:
         dbug_ioc("Read from Bank 6 (addr=0x%x speed=0x%x offset=0x%x)\n",
@@ -609,41 +615,42 @@ PutValIO(ARMul_State *state, ARMword address, ARMword data, int byteNotword)
 
       case 5:
         /* It's either Latch A/B, printer DATA  or the HDC */
-        switch (offset & 0x58) {
-          case 0x00:
-            /*fprintf(stderr,"HDC write: address=0x%x speed=%u\n", address, speed); */
-            HDC_Write(state, offset, data);
-            break;
-
-          case 0x08:
-            HDC_Write(state, offset, data);
-            break;
-
-          case 0x10:
-            dbug_ioc("Write to Printer data latch offset=0x%x data=0x%x\n",
-                     offset, data);
-            break;
-
-          case 0x18:
-            dbug_ioc("Write to Latch B offset=0x%x data=0x%x\n",
-                     offset, data);
-            ioc.LatchB = data & 0xff;
-            FDC_LatchBChange(state);
-            ioc.LatchBold = data & 0xff;
-            break;
-
-          case 0x40:
-            dbug_ioc("Write to Latch A offset=0x%x data=0x%x\n",
-                     offset, data);
-            ioc.LatchA = data & 0xff;
-            FDC_LatchAChange(state);
-            ioc.LatchAold = data & 0xff;
-            break;
-
-          default:
-            dbug_ioc("Writing to non-defined bank 5 address offset=0x%x data=0x%x\n",
-                     offset, data);
-            break;
+        if(speed == 1)
+        {
+          /* Medium speed, assume HDC */
+          /*fprintf(stderr,"HDC write: address=0x%x speed=%u\n", address, speed); */
+          HDC_Write(state, offset, data);
+        }
+        else if(speed == 2)
+        {
+          /* Fast speed */
+          switch(offset & ~3) {
+            case 0x10:
+              dbug_ioc("Write to Printer data latch offset=0x%x data=0x%x\n",
+                       offset, data);
+              break;
+  
+            case 0x18:
+              dbug_ioc("Write to Latch B offset=0x%x data=0x%x\n",
+                       offset, data);
+              ioc.LatchB = data & 0xff;
+              FDC_LatchBChange(state);
+              ioc.LatchBold = data & 0xff;
+              break;
+  
+            case 0x40:
+              dbug_ioc("Write to Latch A offset=0x%x data=0x%x\n",
+                       offset, data);
+              ioc.LatchA = data & 0xff;
+              FDC_LatchAChange(state);
+              ioc.LatchAold = data & 0xff;
+              break;
+  
+            default:
+              dbug_ioc("Writing to non-defined bank 5 address offset=0x%x data=0x%x\n",
+                       offset, data);
+              break;
+          }
         }
         break;
 
