@@ -1524,6 +1524,8 @@ hostfs(ARMul_State *state, ARMword fs_op)
   __riscosify_control = __RISCOSIFY_NO_PROCESS;
 #endif
 
+  ARMword t = clock();
+
   switch (fs_op) {
   case 0: hostfs_open(state);     break;
   case 1: hostfs_getbytes(state); break;
@@ -1534,6 +1536,8 @@ hostfs(ARMul_State *state, ARMword fs_op)
   case 6: hostfs_func(state);     break;
   case 7: hostfs_gbpb(state);     break;
   }
+
+  fprintf(stderr,"took %d\n",clock()-t);
 
 #ifdef __TARGET_UNIXLIB__
   __riscosify_control = old_riscosify;
