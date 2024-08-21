@@ -134,10 +134,9 @@ void ByteCopy(char *dest,const char *src,int size)
     }
   }
   /* Any remaining bytes? */
-  while(size)
+  while(size--)
   {
     dest[size] = src[size ^ 3];
-    size--;
   }
 }
 
@@ -191,10 +190,9 @@ void InvByteCopy(char *dest,const char *src,int size)
     }
   }
   /* Any remaining bytes? */
-  while(size)
+  while(size--)
   {
     dest[size ^ 3] = src[size];
-    size--;
   }
 }
 #endif
