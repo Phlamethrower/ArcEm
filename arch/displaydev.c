@@ -1,5 +1,6 @@
 #include "armdefs.h"
 #include "displaydev.h"
+#include "archio.h"
 
 const DisplayDev *DisplayDev_Current = NULL;
 
@@ -28,3 +29,16 @@ int DisplayDev_Set(ARMul_State *state,const DisplayDev *dev)
   return 0;
 }
 
+void DisplayDev_GetCursorPos(ARMul_State *state,int *x,int *y)
+{
+  static const signed char offsets[4] = {19-6,11-6,7-6,5-6};
+  *x = VIDC.Horiz_CursorStart-(VIDC.Horiz_DisplayStart*2+offsets[(VIDC.ControlReg & 0xc)>>2]);
+  *y = VIDC.Vert_CursorStart-VIDC.Vert_DisplayStart;
+}
+
+static const unsigned long vidcclocks[4] = {24000000,25000000,36000000,24000000};
+
+unsigned long DisplayDev_GetVIDCClockIn(void)
+{
+  return vidcclocks[ioc.IOEBControlReg & IOEB_CR_VIDC_MASK];
+}

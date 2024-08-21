@@ -191,7 +191,7 @@ static void SDD_Name(Host_PollDisplay)(ARMul_State *state)
 
   RefreshMouse(state);
   
-  UpdateCursorPos(state);
+  UpdateCursorPos(state,HD.XScale,HD.XOffset,HD.YScale,HD.YOffset);
 
   XPutImage(PD.disp, PD.CursorPane, PD.MainPaneGC, PD.CursorImage,
               0, 0,

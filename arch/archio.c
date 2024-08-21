@@ -20,6 +20,7 @@
 # include "hostfs.h"
 #endif
 #include "keyboard.h"
+#include "displaydev.h"
 
 /*#define IOC_TRACE*/
 
@@ -60,6 +61,7 @@ IO_Init(ARMul_State *state)
   ioc.NextTimerTrigger = ARMul_Time;
   ioc.TimerFracBit = 0; 
   ioc.IOCRate = ioc.InvIOCRate = 0x10000; /* Default values shouldn't matter so much */
+  ioc.IOEBControlReg = 0;
   EventQ_Insert(state,ARMul_Time,UpdateTimerRegisters_Event);
 
   IO_UpdateNirq(state);
@@ -607,22 +609,22 @@ PutValIO(ARMul_State *state, ARMword address, ARMword data, int byteNotword)
 
       case 5:
         /* It's either Latch A/B, printer DATA  or the HDC */
-        switch (offset & 0x58) {
+        switch (offset & 0x7c) {
           case 0x00:
+          case 0x04:
+          case 0x08:
+          case 0x0c:
             /*fprintf(stderr,"HDC write: address=0x%x speed=%u\n", address, speed); */
             HDC_Write(state, offset, data);
-            break;
-
-          case 0x08:
-            HDC_Write(state, offset, data);
-            break;
 
           case 0x10:
+          case 0x14: /* Is it right for this to be 8 bytes wide? */
             dbug_ioc("Write to Printer data latch offset=0x%x data=0x%x\n",
                      offset, data);
             break;
 
           case 0x18:
+          case 0x1c: /* Is it right for this to be 8 bytes wide? */
             dbug_ioc("Write to Latch B offset=0x%x data=0x%x\n",
                      offset, data);
             ioc.LatchB = data & 0xff;
@@ -631,11 +633,23 @@ PutValIO(ARMul_State *state, ARMword address, ARMword data, int byteNotword)
             break;
 
           case 0x40:
+          case 0x44: /* Is it right for this to be 8 bytes wide? */
             dbug_ioc("Write to Latch A offset=0x%x data=0x%x\n",
                      offset, data);
             ioc.LatchA = data & 0xff;
             FDC_LatchAChange(state);
             ioc.LatchAold = data & 0xff;
+            break;
+
+          case 0x48:
+            dbug_ioc("Write to IOEB CR offset=0x%x data=0x%x\n",
+                     offset, data);
+            data &= 0xf;
+            if(ioc.IOEBControlReg != data)
+            {
+              ioc.IOEBControlReg = data;
+              (DisplayDev_Current->IOEBCRWrite)(state,data);
+            }
             break;
 
           default:

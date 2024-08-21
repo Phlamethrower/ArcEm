@@ -11,8 +11,8 @@
 #include "../armemu.h"
 
 
-#define MonitorWidth 800
-#define MonitorHeight 600
+#define MonitorWidth 1600
+#define MonitorHeight 1200
 
 extern unsigned short *dibbmp;
 extern unsigned short *curbmp;
@@ -77,8 +77,13 @@ void SDD_Name(Host_PollDisplay)(ARMul_State *state);
 
 static void SDD_Name(Host_ChangeMode)(ARMul_State *state,int width,int height,int hz)
 {
-  HD.Width = MIN(width,MonitorWidth);
-  HD.Height = MIN(height,MonitorHeight);
+  if((width > MonitorWidth) || (height > MonitorHeight))
+  {
+    fprintf(stderr,"Mode %dx%d too big\n",width,height);
+    exit(EXIT_FAILURE);
+  }
+  HD.Width = width;
+  HD.Height = height;
   HD.XScale = 1;
   HD.YScale = 1;
   /* Try and detect rectangular pixel modes */
@@ -137,10 +142,14 @@ static void MouseMoved(ARMul_State *state) {
 static void RefreshMouse(ARMul_State *state) {
   int x,y,offset, pix, repeat;
   int memptr;
-  int HorizPos = (VIDC.Horiz_CursorStart-(VIDC.Horiz_DisplayStart*2))*HD.XScale+HD.XOffset;
+  int HorizPos;
   int Height = ((int)VIDC.Vert_CursorEnd - (int)VIDC.Vert_CursorStart)*HD.YScale;
-  int VertPos = (VIDC.Vert_CursorStart-VIDC.Vert_DisplayStart)*HD.YScale+HD.YOffset;
+  int VertPos;
   int diboffs;
+
+  DisplayDev_GetCursorPos(state,&HorizPos,&VertPos);
+  HorizPos = HorizPos*HD.XScale+HD.XOffset;
+  VertPos = VertPos*HD.YScale+HD.YOffset;
 
   if (Height < 0) Height = 0;
   if (VertPos < 0) VertPos = 0;

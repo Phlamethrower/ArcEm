@@ -996,7 +996,7 @@ static void EmuRate_Update(ARMul_State *state,CycleCount nowcycle)
     /* Recalculate IOC rates */
     ioc.InvIOCRate = (((unsigned long long) ARMul_EmuRate)<<16)/2000000;
     ioc.IOCRate = (((unsigned long long) 2000000)<<16)/ARMul_EmuRate;
-//    fprintf(stderr,"EmuRate %d IOC %.4f InvIOC %.4f\n",ARMul_EmuRate,((float)ioc.IOCRate)/65536,((float)ioc.InvIOCRate)/65536);
+    //fprintf(stderr,"EmuRate %d IOC %.4f InvIOC %.4f\n",ARMul_EmuRate,((float)ioc.IOCRate)/65536,((float)ioc.InvIOCRate)/65536);
   }
   EventQ_RescheduleHead(state,nowcycle+(ARMul_EmuRate>>3),EmuRate_Update); /* Update 8 times per second? */
 }

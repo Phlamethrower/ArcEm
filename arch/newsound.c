@@ -30,17 +30,21 @@ void Sound_UpdateDMARate(ARMul_State *state)
   /* Calculate a new value for how often we should trigger a sound DMA fetch
      Relies on:
      VIDC.SoundFreq - the rate of the sound system we're trying to emulate
-     ARMul_EmuRate - roughly how many EventQ clock cycles occur per second */
+     ARMul_EmuRate - roughly how many EventQ clock cycles occur per second
+     ioc.IOEBControlReg - the VIDC clock source */
   static unsigned int oldsoundfreq = 0;
   static unsigned long oldemurate = 0;
-  if((VIDC.SoundFreq == oldsoundfreq) && (ARMul_EmuRate == oldemurate))
+  static unsigned char oldioebcr = 0;
+  if((VIDC.SoundFreq == oldsoundfreq) && (ARMul_EmuRate == oldemurate) && (ioc.IOEBControlReg == oldioebcr))
     return;
   oldsoundfreq = VIDC.SoundFreq;
   oldemurate = ARMul_EmuRate;
-  /* DMA fetches 16 bytes, at a rate of 1000000/(16*(VIDC.SoundFreq+2)) Hz */
-  unsigned long DMArate = 1000000/(16*(VIDC.SoundFreq+2));
-  /* Now calculate how many EventQ cycles this is */
-  Sound_DMARate = ARMul_EmuRate/DMArate;
+  oldioebcr = ioc.IOEBControlReg;
+  /* DMA fetches 16 bytes, at a rate of 1000000/(16*(VIDC.SoundFreq+2)) Hz, for a 24MHz VIDC clock
+     So for a variable clock, and taking into account ARMul_EmuRate, we get:
+     Sound_DMARate = ARMul_EmuRate*16*(VIDC.SoundFreq+2)*24/VIDC_clk
+ */
+  Sound_DMARate = (((unsigned long long) ARMul_EmuRate)*(16*24)*(VIDC.SoundFreq+2))/DisplayDev_GetVIDCClockIn();
 //  printf("UpdateDMARate: f %d r %u -> %u\n",VIDC.SoundFreq,ARMul_EmuRate,Sound_DMARate);
 }
 

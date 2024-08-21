@@ -13,6 +13,7 @@
 #include "../armdefs.h"
 #include "../arch/sound.h"
 #include "../arch/archio.h"
+#include "../arch/displaydev.h"
 
 #include "kernel.h"
 #include "swis.h"
@@ -35,10 +36,10 @@ int sound_buff_mask=BUFFER_SAMPLES-1; /* For benefit of assembler code */
 extern void buffer_fill(void); /* Assembler function for performing the buffer fills */
 extern void error_handler(void); /* Assembler function attached to ErrorV */
 
-void shutdown_sharedsound(void);
+static void shutdown_sharedsound(void);
 
 extern void __write_backtrace(int signo);
-void sigfunc(int sig)
+static void sigfunc(int sig)
 {
 	shutdown_sharedsound();
 #if 0
@@ -75,7 +76,7 @@ void sigfunc(int sig)
 	exit(0);
 }
 
-int init_sharedsound(void)
+static int init_sharedsound(void)
 {
 	/* Try to register sharedsound handler, return nonzero on failure */
 	_kernel_swi_regs regs;
@@ -139,7 +140,7 @@ int init_sharedsound(void)
 	return 0;
 }                           
 
-void shutdown_sharedsound(void)
+static void shutdown_sharedsound(void)
 {
 	_kernel_swi_regs regs;
 	/* Deregister sharedsound handler */
@@ -180,11 +181,15 @@ void Sound_HandleData(const SoundData *buffer,int numSamples,int samplePeriod)
     return;
   numSamples *= 2;
   static int oldperiod = -1;
-  if(samplePeriod != oldperiod)
+  static unsigned long oldclockin = 0;
+  unsigned long clockin = DisplayDev_GetVIDCClockIn(); 
+  if((samplePeriod != oldperiod) || (clockin != oldclockin))
   {
     oldperiod = samplePeriod;
-    int sampleRate = 1024000000/samplePeriod;
-    fprintf(stderr,"New sample period %d -> rate %d\n",samplePeriod,sampleRate>>10);
+    oldclockin = clockin;
+    /* Calculate sample rate in 1/1024Hz */
+    int sampleRate = ((unsigned long long) clockin)*1024/(24*samplePeriod);
+    fprintf(stderr,"New sample period %d (VIDC %dMHz) -> rate %d\n",samplePeriod,clockin/1000000,sampleRate>>10);
     /* Convert to step rate */
     _swix(SharedSound_SampleRate,_INR(0,1)|_OUT(3),sound_handler_id,sampleRate,&sound_rate);
     fprintf(stderr,"-> step %08x\n",sound_rate);

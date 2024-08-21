@@ -1124,12 +1124,22 @@ static void SDD_Name(Reschedule)(ARMul_State *state,CycleCount nowtime,EventQ_Fu
 
 static void SDD_Name(FrameStart)(ARMul_State *state,CycleCount nowtime)
 {
-  static const unsigned long PixelClocks[4] = {8000000,12000000,16000000,24000000};
+  /* Assuming a multiplier of 2, these are the required clock dividers
+     (selected via bottom two bits of VIDC.ControlReg): */
+  static const unsigned char ClockDividers[4] = {
+  /* Source rates:     24.0MHz     25.0MHz      36.0MHz */
+    6, /* 1/3      ->   8.0MHz      8.3MHz      12.0MHz */
+    4, /* 1/2      ->  12.0MHz     12.5MHz      18.0MHz */
+    3, /* 2/3      ->  16.0MHz     16.6MHz      24.0MHz */
+    2, /* 1/1      ->  24.0MHz     25.0MHz      36.0MHz */
+  };
 
   const unsigned int NewCR = VIDC.ControlReg;
+  const unsigned long ClockIn = 2*DisplayDev_GetVIDCClockIn();
+  const unsigned char ClockDivider = ClockDividers[NewCR&3]; 
 
   /* Calculate new line rate */
-  DC.LineRate = (((unsigned long long) ARMul_EmuRate)*(VIDC.Horiz_Cycle*2+2))/PixelClocks[NewCR&3];
+  DC.LineRate = (((unsigned long long) ARMul_EmuRate)*(VIDC.Horiz_Cycle*2+2))*ClockDivider/ClockIn;
   if(DC.LineRate < 100)
     DC.LineRate = 100; /* Clamp to safe minimum value */
 
@@ -1168,7 +1178,13 @@ static void SDD_Name(FrameStart)(ARMul_State *state,CycleCount nowtime)
   /* Handle any mode changes */
   if(DC.ModeChanged)
   {
-    /* Work out new screen parameters */
+    /* Work out new screen parameters
+       TODO - Using display area isn't always appropriate, e.g. Stunt Racer 2000
+       does some screen transitions by adjusting the display area height over
+       time.
+       Determining screen size via the borders would be better, but wouldn't
+       allow the host to hide the borders and so use better display modes/scale
+       factors. */
     int Width = (VIDC.Horiz_DisplayEnd-VIDC.Horiz_DisplayStart)*2;
     int Height = (VIDC.Vert_DisplayEnd-VIDC.Vert_DisplayStart);
     if(Height <= 0)
@@ -1178,11 +1194,11 @@ static void SDD_Name(FrameStart)(ARMul_State *state,CycleCount nowtime)
       Height = VIDC.Vert_BorderEnd-VIDC.Vert_BorderStart;
     }
     long FramePeriod = (VIDC.Horiz_Cycle*2+2)*(VIDC.Vert_Cycle+1);
-    int FrameRate = PixelClocks[NewCR&3]/FramePeriod;
+    int FrameRate = ClockIn/(FramePeriod*ClockDivider);
     
     if((Width != DC.LastHostWidth) || (Height != DC.LastHostHeight) || (FrameRate != DC.LastHostHz))
     {
-      fprintf(stderr,"New mode: %dx%d, %dHz (CR %x)\n",Width,Height,FrameRate,NewCR);
+      fprintf(stderr,"New mode: %dx%d, %dHz (CR %x ClockIn %dMhz)\n",Width,Height,FrameRate,NewCR,(int)(ClockIn/2000000));
 #ifdef VIDEO_STATS
       vidstats_Dump("Stats for previous mode");
 #endif
@@ -1283,7 +1299,7 @@ static void SDD_Name(RowStart)(ARMul_State *state,CycleCount nowtime)
 
 /*
 
-  VIDC write handler
+  VIDC/IOEB write handler
 
 */
 
@@ -1489,6 +1505,10 @@ static void SDD_Name(VIDCPutVal)(ARMul_State *state,ARMword address, ARMword dat
   }; /* Register switch */
 }; /* PutValVIDC */
 
+static void SDD_Name(IOEBCRWrite)(ARMul_State *state,ARMword data) {
+  DC.ModeChanged = 1;
+};
+
 /*
 
   DisplayDev wrapper
@@ -1550,6 +1570,7 @@ const DisplayDev SDD_DisplayDev = {
   SDD_Name(Shutdown),
   SDD_Name(VIDCPutVal),
   SDD_Name(DAGWrite),
+  SDD_Name(IOEBCRWrite),
 };
 
 /*

@@ -150,6 +150,7 @@ ifeq (${SYSTEM},X)
 CFLAGS += -DSYSTEM_X -I/usr/X11R6/include
 LIBS += -L/usr/X11R6/lib -lXext -lX11
 OBJS += X/true.o X/pseudo.o
+#SOUND_SUPPORT = yes
 endif
 
 ifeq (${SYSTEM},win)

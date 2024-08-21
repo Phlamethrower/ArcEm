@@ -1,20 +1,9 @@
 /* (c) David Alan Gilbert 1995-1999 - see Readme file for copying info */
 /* Display and keyboard interface for the Arc emulator */
 
-/* Now does TrueColor and PseudoColor X modes; but doesnt handle palette
-   changes properly in TrueColor - in particular it doesn't force a redraw if
-   the palette is changed which it really needs to */
-
-#define KEYREENABLEDELAY 1000
 /*#define DEBUG_VIDCREGS */
 /*#define DEBUG_KBD */
 /*#define DEBUG_MOUSEMOVEMENT */
-
-/* NOTE: Can't use ARMul's refresh function because it has a small limit on the
-   time delay from posting the event to it executing */
-/* It's actually decremented once every POLLGAP - that is called with the ARMul
-   scheduler */
-#define AUTOREFRESHPOLL 2500
 
 #include <assert.h>
 #include <string.h>
@@ -528,8 +517,8 @@ DisplayDev_Init(ARMul_State *state)
 
     for(prescol=0; prescol<256; prescol++) {
       /* For pseudocolour, we use a fixed palette that matches the default
-         RISC OS 256 colour one. This isn't ideal but it's the only real way
-         we can support mid-frame palette swaps. */
+         RISC OS 256 colour one. This isn't ideal but it should work OK with
+         most programs, even stuff that relies on mid-frame palette swaps. */
       int tint = prescol & 0x3;
       int r = prescol & 0xc;
       int g = (prescol & 0x30)>>2;
@@ -544,8 +533,6 @@ DisplayDev_Init(ARMul_State *state)
 
     /* I think is to get the window manager to automatically set the colourmap ... */
     XSetWMColormapWindows(PD.disp,PD.BackingWindow,&(PD.MainPane),1);
-
-    /*PD.ArcsColormap=DefaultColormapOfScreen(PD.xScreen); */
   } else {
     /* TrueColor - the colourmap is actually a fixed thing */
   };
@@ -685,22 +672,17 @@ static void ProcessButton(ARMul_State *state, XButtonEvent *button)
 
 
 /*----------------------------------------------------------------------------*/
-/* Move the Control pane window                                                */
+/* Move the cursor window                                                     */
 
-void UpdateCursorPos(ARMul_State *state) {
-  int HorizPos = (int)VIDC.Horiz_CursorStart - (int)VIDC.Horiz_DisplayStart * 2;
-  int VertPos, tmp;
+void UpdateCursorPos(ARMul_State *state,int xscale,int xoffset,int yscale,int yoffset) {
+  int HorizPos;
+  int VertPos;
   int Height = (int)VIDC.Vert_CursorEnd - (int)VIDC.Vert_CursorStart;
-#ifdef DEBUG_CURSOR
-  fprintf(stderr, "UpdateCursorPos: Horiz_CursorStart=0x%x\n",  VIDC.Horiz_CursorStart);
-  fprintf(stderr, "UpdateCursorPos: Vert_CursorStart=0x%x\n",   VIDC.Vert_CursorStart);
-  fprintf(stderr, "UpdateCursorPos: Vert_CursorEnd=0x%x\n",     VIDC.Vert_CursorEnd);
-  fprintf(stderr, "UpdateCursorPos: Horiz_DisplayStart=0x%x\n", VIDC.Horiz_DisplayStart);
-  fprintf(stderr, "UpdateCursorPos: Vert_DisplayStart=0x%x\n",  VIDC.Vert_DisplayStart);
-#endif
-  VertPos = (int)VIDC.Vert_CursorStart;
-  tmp = (signed int)VIDC.Vert_DisplayStart;
-  VertPos -= tmp;
+
+  DisplayDev_GetCursorPos(state,&HorizPos,&VertPos);
+  HorizPos = HorizPos*xscale+xoffset;
+  VertPos = VertPos*yscale+yoffset;
+  
   if (Height < 1)
     Height = 1;
 

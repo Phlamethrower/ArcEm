@@ -29,7 +29,7 @@ extern int Sound_InitHost(ARMul_State *state);
 
 /* This is the call made to the platform code, once new sound data is ready
    numSamples is the number of stereo pairs
-   samplePeriod is measured in microseconds */
+   samplePeriod is measured in audio clock ticks (with there being DisplayDev_GetVIDCClockIn()/24 ticks per second) */
 extern void Sound_HandleData(const SoundData *buffer,int numSamples,int samplePeriod);
 #endif
 

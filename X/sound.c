@@ -11,6 +11,7 @@
 
 #include "../armdefs.h"
 #include "../arch/sound.h"
+#include "../arch/displaydev.h"
 
 static unsigned long format = AFMT_S16_LE;
 static unsigned long channels = 2;
@@ -37,15 +38,18 @@ static const int sound_buff_mask=BUFFER_SAMPLES-1;
 void Sound_HandleData(const SoundData *buffer,int numSamples,int samplePeriod)
 {
   static int oldperiod = -1;
+  static unsigned long oldclockin = 0;
+  unsigned long clockin = DisplayDev_GetVIDCClockIn(); 
 
   numSamples *= 2;
   
-  if(samplePeriod != oldperiod)
+  if((samplePeriod != oldperiod) || (clockin != oldclockin))
   {
     oldperiod = samplePeriod;
+    oldclockin = clockin;
     
     if (samplePeriod != 0) {
-      sampleRate = 1000000 / samplePeriod;
+      sampleRate = clockin / (24*samplePeriod);
     } else {
       sampleRate = 44100;
     }
@@ -54,6 +58,7 @@ void Sound_HandleData(const SoundData *buffer,int numSamples,int samplePeriod)
     ioctl(soundDevice, SOUND_PCM_WRITE_RATE, &sampleRate);
     ioctl(soundDevice, SOUND_PCM_READ_RATE, &sampleRate);
     printf("set sample rate to %lu\n", sampleRate);
+    /* TODO - Cope properly with situations where we can't get the desired rate */
   }
 
 #ifdef SOUND_THREAD
@@ -110,6 +115,42 @@ void Sound_HandleData(const SoundData *buffer,int numSamples,int samplePeriod)
 
   pthread_yield();
 #else
+  audio_buf_info buf;
+  if (ioctl(soundDevice, SOUND_PCM_GETOSPACE, &buf) != -1) {
+    /* Adjust fudge rate based around how much buffer space is available
+       We aim for the buffer to be somewhere between 1/4 and 3/4 full, but don't
+       explicitly set the buffer size, so we're at the mercy of the sound system
+       in terms of how much lag there'll be */
+    int bufsize = buf.fragsize*buf.fragstotal;
+    int buffree = buf.bytes/sizeof(SoundData);
+    int used = (bufsize-buf.bytes)/sizeof(SoundData);
+    bufsize /= sizeof(SoundData);
+    if(numSamples > buffree)
+    {
+      fprintf(stderr,"*** sound overflow! %d ***\n",numSamples-buffree);
+      numSamples = buffree; /* We could block until space is available, but I'm woried we'd get stuck blocking forever because the FudgeRate increase wouldn't compensate for the ARMul cycles lost due to blocking */
+      Sound_FudgeRate+=10;
+    }
+    else if(!used)
+    {
+      fprintf(stderr,"*** sound underflow! ***\n");
+      Sound_FudgeRate-=10;
+    }
+    else if(used < bufsize/4)
+    {
+      Sound_FudgeRate--;
+    }
+    else if(buffree < bufsize/4)
+    {
+      Sound_FudgeRate++;
+    }
+    else if(Sound_FudgeRate)
+    {
+      /* Bring the fudge value back towards 0 until we go out of the comfort zone */
+      Sound_FudgeRate += (Sound_FudgeRate>0?-1:1);
+    }
+  }
+  
   write(soundDevice,buffer,numSamples*sizeof(SoundData));
 #endif
 }
@@ -183,6 +224,14 @@ Sound_InitHost(ARMul_State *state)
     fprintf(stderr, "Could not set initial sample rate\n");
     return -1;
   }
+
+  /* Check that GETOSPACE is supported */
+  audio_buf_info buf;
+  if (ioctl(soundDevice, SOUND_PCM_GETOSPACE, &buf) == -1) {
+    fprintf(stderr,"Could not read output space\n");
+    return -1;
+  }
+  fprintf(stderr,"Sound buffer params: frags %d total %d size %d bytes %d\n",buf.fragments,buf.fragstotal,buf.fragsize,buf.bytes);
 
   eSound_StereoSense = Stereo_LeftRight;
 

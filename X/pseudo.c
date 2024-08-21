@@ -30,7 +30,7 @@ static int UpdateStart=INT_MAX,UpdateEnd=-1;
 
 static SDD_HostColour SDD_Name(Host_GetColour)(ARMul_State *state,unsigned int col)
 {
-  /* We used a fixed palette which matches the standard 256 colour RISC OS one */
+  /* We use a fixed palette which matches the standard 256 colour RISC OS one */
   int tint = (col & 0x3) + ((col & 0x30)>>4) + ((col & 0x300)>>8) + 1;
   return (tint/3)+(col&0xc)+((col&0xc0)>>2)+((col&0xc00)>>4);
 }  
@@ -178,7 +178,7 @@ static void SDD_Name(Host_PollDisplay)(ARMul_State *state)
 
   RefreshMouse(state);
 
-  UpdateCursorPos(state);
+  UpdateCursorPos(state,HD.XScale,HD.XOffset,HD.YScale,HD.YOffset);
 
   XPutImage(PD.disp, PD.CursorPane, PD.MainPaneGC, PD.CursorImage,
               0, 0,

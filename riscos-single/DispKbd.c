@@ -43,15 +43,24 @@ static HostMode *SelectROScreenMode(int x, int y, int aspect, int *outxscale, in
 const char * const __dynamic_da_name = "ArcEm Heap";
 #endif
 
-static const ARMword ModeVarsIn[5] = {
+#define MODE_VAR_WIDTH 0
+#define MODE_VAR_HEIGHT 1
+#define MODE_VAR_BPL 2
+#define MODE_VAR_ADDR 3
+#define MODE_VAR_XEIG 4
+#define MODE_VAR_YEIG 5
+
+static const ARMword ModeVarsIn[] = {
  11, /* Width-1 */
  12, /* Height-1 */
  6, /* Bytes per line */
  148, /* Address */
+ 4, /* XEig */
+ 5, /* YEig */
  -1,
 };
 
-static ARMword ModeVarsOut[4];
+static ARMword ModeVarsOut[6];
 
 static int CursorXOffset=0; /* How many columns were skipped from the left edge of the cursor image */
 
@@ -85,7 +94,7 @@ static void SDD_Name(Host_ChangeMode)(ARMul_State *state,int width,int height,in
 
 static inline SDD_Row SDD_Name(Host_BeginRow)(ARMul_State *state,int row,int offset)
 {
-  return ((SDD_Row) (ModeVarsOut[3] + ModeVarsOut[2]*row))+offset;
+  return ((SDD_Row) (ModeVarsOut[MODE_VAR_ADDR] + ModeVarsOut[MODE_VAR_BPL]*row))+offset;
 }
 
 static inline void SDD_Name(Host_EndRow)(ARMul_State *state,SDD_Row *row) { /* nothing */ };
@@ -136,8 +145,8 @@ static void SDD_Name(Host_ChangeMode)(ARMul_State *state,int width,int height,in
   }
   
   _swi(OS_ReadVduVariables,_INR(0,1),ModeVarsIn,ModeVarsOut);
-  HD.Width = ModeVarsOut[0]+1; /* Should match mode->w, mode->h, but use these just to make sure */
-  HD.Height = ModeVarsOut[1]+1;
+  HD.Width = ModeVarsOut[MODE_VAR_WIDTH]+1; /* Should match mode->w, mode->h, but use these just to make sure */
+  HD.Height = ModeVarsOut[MODE_VAR_HEIGHT]+1;
   
   fprintf(stderr,"Emu mode %dx%d aspect %.1f mapped to real mode %dx%d aspect %.1f, with scale factors %dx%d\n",width,height,((float)aspect)/2.0f,mode->w,mode->h,((float)mode->aspect)/2.0f,HD.XScale,HD.YScale);
 
@@ -279,6 +288,17 @@ static void leds_changed(unsigned int leds)
 }
 
 /*-----------------------------------------------------------------------------*/
+
+static int old_escape,old_break;
+
+static void restorebreak(void)
+{
+  /* Restore escape & break actions */
+  _swix(OS_Byte,_INR(0,2),200,old_escape,0);
+  _swix(OS_Byte,_INR(0,2),247,old_break,0);
+}
+
+/*-----------------------------------------------------------------------------*/
 int
 DisplayDev_Init(ARMul_State *state)
 {
@@ -287,9 +307,10 @@ DisplayDev_Init(ARMul_State *state)
 
   InitModeTable();
 
-  /* Disable escape & break have to use alt-break to quit */
-  _swi(OS_Byte,_INR(0,2),200,1,0xfe);
-  _swi(OS_Byte,_INR(0,2),247,0xaa,0);
+  /* Disable escape & break. Have to use alt-break, or ArcEm_Shutdown, to quit the emulator. */
+  _swi(OS_Byte,_INR(0,2)|_OUT(1),200,1,0xfe,&old_escape);
+  _swi(OS_Byte,_INR(0,2)|_OUT(1),247,0xaa,0,&old_break);
+  atexit(restorebreak);
 
   return DisplayDev_Set(state,&SDD_DisplayDev);
 } /* DisplayKbd_InitHost */
@@ -316,38 +337,22 @@ static void ProcessKey(ARMul_State *state, int key, int transition) {
 static void UpdateCursorPos(ARMul_State *state) {
   int internal_x, internal_y;
   char block[5];
-  int xeig=_swi(OS_ReadModeVariable,_INR(0,1)|_RETURN(2),-1,4);
-  int yeig=_swi(OS_ReadModeVariable,_INR(0,1)|_RETURN(2),-1,5);
 
   /* Calculate correct cursor position, relative to the display start */
-  internal_x = VIDC.Horiz_CursorStart+6;
-  switch(VIDC.ControlReg & 0xc)
-  {
-  case 0: /* 1bpp */
-    internal_x -= VIDC.Horiz_DisplayStart*2+19;
-    break;
-  case 4: /* 2bpp */
-    internal_x -= VIDC.Horiz_DisplayStart*2+11;
-    break;
-  case 8: /* 4bpp */
-    internal_x -= VIDC.Horiz_DisplayStart*2+7;
-    break;
-  case 12: /* 8bpp */
-    internal_x -= VIDC.Horiz_DisplayStart*2+5;
-    break;
-  }
+  DisplayDev_GetCursorPos(state,&internal_x,&internal_y);
+  /* Convert to our screen space */
   internal_x+=CursorXOffset;
   internal_x=internal_x*HOSTDISPLAY.XScale+HOSTDISPLAY.XOffset;
-  internal_y=(VIDC.Vert_CursorStart-VIDC.Vert_DisplayStart)*HOSTDISPLAY.YScale+HOSTDISPLAY.YOffset;
+  internal_y=internal_y*HOSTDISPLAY.YScale+HOSTDISPLAY.YOffset;
 
   block[0]=5;
   {
-    short x = internal_x << xeig;
+    short x = internal_x << ModeVarsOut[MODE_VAR_XEIG];
     block[1] = x & 255;
     block[2] = x >> 8;
   }
   {
-    short y = (HD.Height-internal_y) << yeig;
+    short y = (HD.Height-internal_y) << ModeVarsOut[MODE_VAR_YEIG];
     block[3] = y & 255;
     block[4] = y >> 8;
   }
@@ -360,10 +365,6 @@ static void UpdateCursorPos(ARMul_State *state) {
 /* Called on an X motion event */
 static void MouseMoved(ARMul_State *state, int mousex, int mousey/*,XMotionEvent *xmotion*/) {
   int xdiff,ydiff;
-  /* Well the coordinates of the mouse cursor are now in xmotion->x and
-    xmotion->y, I'm going to compare those against the cursor position
-    and transmit the difference.  This can't possibly take care of the OS's
-    hotspot offsets */
 
   /* We are now only using differences from the reference position */
   if ((mousex==HD.Width/2) && (mousey==HD.Height/2)) return;
@@ -374,10 +375,10 @@ static void MouseMoved(ARMul_State *state, int mousex, int mousey/*,XMotionEvent
     int y=HD.Height/2;
 
     block[0]=3;
-    block[1]=x % 256;
-    block[2]=x / 256;
-    block[3]=y % 256;
-    block[4]=y / 256;
+    block[1]=x & 255;
+    block[2]=(x>>8) & 255;
+    block[3]=y & 255;
+    block[4]=(y>>8) & 255;
 
     _swi(OS_Word, _INR(0,1), 21, &block);
   }
@@ -485,7 +486,7 @@ static void InitModeTable(void)
       if((hArcemConfig.iLCDResX < mode[2]) || (hArcemConfig.iLCDResY < mode[3]))
         goto next;
       /* Assume the monitor will scale it up while maintaining the aspect ratio
-         Therefore, work out how much it can scale it before it reaches the edges, and check that value */
+         Therefore, work out how much it can scale it before it reaches an edge, and check that value */
       float xscale = ((float)hArcemConfig.iLCDResX)/mode[2];
       float yscale = ((float)hArcemConfig.iLCDResY)/mode[3];
       xscale = MIN(xscale,yscale);

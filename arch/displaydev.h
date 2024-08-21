@@ -6,6 +6,7 @@ typedef struct {
   void (*Shutdown)(ARMul_State *state); /* Shutdown display device */
   void (*VIDCPutVal)(ARMul_State *state,ARMword address, ARMword data,int bNw); /* Call made by core to handle writing to VIDC registers */
   void (*DAGWrite)(ARMul_State *state,int reg,ARMword val); /* Call made by core when video DAG registers are updated. reg 0=Vinit, 1=Vstart, 2=Vend, 3=Cinit */
+  void (*IOEBCRWrite)(ARMul_State *state,ARMword val); /* Call made by core when IOEB control register is updated */
 } DisplayDev;
 
 /* Raw VIDC registers */
@@ -42,6 +43,11 @@ extern int DisplayDev_Set(ARMul_State *state,const DisplayDev *dev); /* Switch t
 
 /* Host must provide this function to initialize the default display device */
 extern int DisplayDev_Init(ARMul_State *state);
+
+/* Calculate cursor position relative to the first display pixel */
+extern void DisplayDev_GetCursorPos(ARMul_State *state,int *x,int *y);
+
+extern unsigned long DisplayDev_GetVIDCClockIn(void); /* Get VIDC source clock rate (affected by IOEB CR) */
 
 #endif
 
