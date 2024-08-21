@@ -15,8 +15,6 @@
 #include <string.h>
 
 #include "arch/armarc.h"
-#include "arch/hdc63463.h"
-#include "arch/keyboard.h"
 #ifdef SOUND_SUPPORT
 #include "arch/sound.h"
 #endif
@@ -93,41 +91,6 @@ static void vidstats_Dump(const char *c)
 
 /*
 
-  FDC/HDC/keyboard
-
-*/
-
-#ifndef SYSTEM_gp2x
-static void FDCHDC_Poll(ARMul_State *state,CycleCount nowtime)
-{
-  /* HDC & FDC want calling every 250 cycles, apparently */
-  EventQ_RescheduleHead(state,nowtime+POLLGAP*2,FDCHDC_Poll);
-  FDC_Regular(state);
-  HDC_Regular(state);
-}
-#endif
-
-static void Keyboard_Poll(ARMul_State *state,CycleCount nowtime)
-{
-  EventQ_RescheduleHead(state,nowtime+POLLGAP*100,Keyboard_Poll);
-  /* Call host-specific routine */
-  DisplayKbd_PollHostKbd(state);
-  /* Keyboard check */
-  int KbdSerialVal = IOC_ReadKbdTx(state);
-  if (KbdSerialVal != -1) {
-    Kbd_CodeFromHost(state, (unsigned char) KbdSerialVal);
-  } else {
-    if (KBD.TimerIntHasHappened > 2) {
-      KBD.TimerIntHasHappened = 0;
-      if (KBD.KbdState == KbdState_Idle) {
-        Kbd_StartToHost(state);
-      }
-    }
-  }
-}
-
-/*
-
   Display - Palette updates
 
 */
@@ -178,13 +141,69 @@ static inline void Display_PaletteUpdate8bpp(ARMul_State *state,HostPixel *Palet
 
 /*
 
+  Display - Host framebuffer interface
+
+*/
+
+#ifdef SYSTEM_X
+#include "X/disphost.h"
+#else
+/* The implementation here is suitable for hosts that provide direct framebuffer access, and don't require notification of any region updates */
+
+/* DHRow is a type that effectively acts as an iterator over the contents of a row/scanline in the host display
+   It should iterate from the leftmost pixel to the right, and be tolerant of being copied for passing to functions */
+typedef HostPixel *DHRow;
+
+/* Return a DHRow suitable for accessing the indicated row, starting from the given X offset */
+static inline DHRow DHRow_BeginRow(ARMul_State *state,int row,int offset)
+{
+  return DisplayKbd_GetScanline(state,row)+offset;
+}
+
+/* End the use of a DHRow instance. This will not be called for DHRow copies that were passed to the rendering functions. */
+static inline void DHRow_EndRow(ARMul_State *state,DHRow *row) { /* nothing */ };
+
+/* Indicate that we're about to begin updating 'count' pixels, starting from the current position */
+static inline void DHRow_BeginUpdate(ARMul_State *state,DHRow *row,unsigned int count) { /* nothing */ };
+
+/* Indicate that we've finished updating the pixels */
+static inline void DHRow_EndUpdate(ARMul_State *state,DHRow *row) { /* nothing */ };
+
+/* Skip ahead 'count' pixels */
+static inline void DHRow_SkipPixels(ARMul_State *state,DHRow *row,unsigned int count) { (*row) += count; }
+
+/* Write a single pixel and move ahead one */
+static inline void DHRow_WritePixel(ARMul_State *state,DHRow *row,HostPixel pix) { *(*row)++ = pix; }
+
+/* Set N consecutive pixels to the same value. 'count' may be zero. */
+static inline void DHRow_WritePixels(ARMul_State *state,DHRow *row,HostPixel pix,unsigned int count) { while(count--) *(*row)++ = pix; }
+#endif
+
+/*
+
+  Display - Screen output general
+
+*/
+
+/* Prototype of a function used for updating the display area of a row.
+   'dhrow' is expected to already be pointing to the start of the display area
+   Returns non-zero if the row was updated
+*/
+typedef int (*Display_RowFunc)(ARMul_State *state,int row,DHRow dhrow,int flags);
+
+
+#define ROWFUNC_FORCE 0x1 /* Force row to be fully redrawn */
+#define ROWFUNC_UPDATEFLAGS 0x2 /* Update the UpdateFlags */
+
+#define ROWFUNC_UPDATED 0x4 /* Flag used internally by rowfuncs to indicate whether anything was done */
+
+/*
+
   Display - Screen output for 1X horizontal scaling
 
 */
 
-typedef int (*Display_RowFunc)(ARMul_State *state,int row,HostPixel *out,int force);
-
-static int Display_RowFunc1bpp1X(ARMul_State *state,int row,HostPixel *out,int force)
+static int Display_RowFunc1bpp1X(ARMul_State *state,int row,DHRow dhrow,int flags)
 {
   int i;
   HostPixel *Palette = HD.Palette;
@@ -196,11 +215,10 @@ static int Display_RowFunc1bpp1X(ARMul_State *state,int row,HostPixel *out,int f
   unsigned int Vend = (MEMC.Vend+1)<<7; /* Point to pixel after end */
   const unsigned char *RAM = (unsigned char *) MEMC.PhysRam;
   int Remaining = DC.LastHostWidth;
-  int Updated = 0;
 
   /* Sanity checks to avoid looping forever */
   if((Vptr >= Vend) || (Vstart >= Vend))
-    return;
+    return 0;
   if(Vptr >= Vend)
     Vptr = Vstart;
 
@@ -214,20 +232,21 @@ static int Display_RowFunc1bpp1X(ARMul_State *state,int row,HostPixel *out,int f
     unsigned int FlagsOffset = Vptr/(8*UPDATEBLOCKSIZE);
     int Available = MIN(Remaining,MIN(((FlagsOffset+1)*8*UPDATEBLOCKSIZE)-Vptr,Vend-Vptr));
       
-    if(force || (HD_UpdateFlags[FlagsOffset] != MEMC_UpdateFlags[FlagsOffset]))
+    if((flags & ROWFUNC_FORCE) || (HD_UpdateFlags[FlagsOffset] != MEMC_UpdateFlags[FlagsOffset]))
     {
       VIDEO_STAT(DisplayRedraw,1,1);
-      VIDEO_STAT(DisplayRedrawForced,force,1);
+      VIDEO_STAT(DisplayRedrawForced,(flags & ROWFUNC_FORCE),1);
       VIDEO_STAT(DisplayRedrawUpdated,(HD_UpdateFlags[FlagsOffset] != MEMC_UpdateFlags[FlagsOffset]),1);
       VIDEO_STAT(DisplayBits,1,Available);
-      Updated = 1;
+      flags |= ROWFUNC_UPDATED;
       /* Process the pixels in this region, stopping at end of row/update block/Vend */
+      DHRow_BeginUpdate(state,&dhrow,Available);
       const unsigned char *In = RAM+(Vptr>>3);
       unsigned int Bit = 1<<(Vptr & 7);
       for(i=0;i<Available;i++)
       {
         int idx = (*In & Bit)?1:0;
-        *out++ = Palette[idx];
+        DHRow_WritePixel(state,&dhrow,Palette[idx]);
         Bit <<= 1;
         if(Bit == 256)
         {
@@ -235,9 +254,10 @@ static int Display_RowFunc1bpp1X(ARMul_State *state,int row,HostPixel *out,int f
           In++;
         }
       }
+      DHRow_EndUpdate(state,&dhrow);
     }
     else
-      out += Available;
+      DHRow_SkipPixels(state,&dhrow,Available);
 
     Remaining -= Available;      
     Vptr += Available;
@@ -247,7 +267,7 @@ static int Display_RowFunc1bpp1X(ARMul_State *state,int row,HostPixel *out,int f
   DC.Vptr = Vptr;
         
   /* If we updated anything, copy over the updated flags (Done last in case the same flags block is encountered multiple times in the same row) */
-  if(Updated)
+  if((flags & (ROWFUNC_UPDATED | ROWFUNC_UPDATEFLAGS)) == (ROWFUNC_UPDATED | ROWFUNC_UPDATEFLAGS))
   {
     Vptr = startVptr;
     Remaining = startRemain;
@@ -265,10 +285,10 @@ static int Display_RowFunc1bpp1X(ARMul_State *state,int row,HostPixel *out,int f
     }
   }
 
-  return Updated;
+  return (flags & ROWFUNC_UPDATED);
 }
 
-static int Display_RowFunc2bpp1X(ARMul_State *state,int row,HostPixel *out,int force)
+static int Display_RowFunc2bpp1X(ARMul_State *state,int row,DHRow dhrow,int flags)
 {
   int i;
   HostPixel *Palette = HD.Palette;
@@ -280,11 +300,10 @@ static int Display_RowFunc2bpp1X(ARMul_State *state,int row,HostPixel *out,int f
   unsigned int Vend = (MEMC.Vend+1)<<7; /* Point to pixel after end */
   const unsigned char *RAM = (unsigned char *) MEMC.PhysRam;
   int Remaining = DC.LastHostWidth*2; /* Scale up to account for everything else counting in bits */
-  int Updated = 0;
 
   /* Sanity checks to avoid looping forever */
   if((Vptr >= Vend) || (Vstart >= Vend))
-    return;
+    return 0;
   if(Vptr >= Vend)
     Vptr = Vstart;
 
@@ -299,20 +318,21 @@ static int Display_RowFunc2bpp1X(ARMul_State *state,int row,HostPixel *out,int f
     /* Note: This is the number of available bits, not pixels */
     int Available = MIN(Remaining,MIN(((FlagsOffset+1)*8*UPDATEBLOCKSIZE)-Vptr,Vend-Vptr));
       
-    if(force || (HD_UpdateFlags[FlagsOffset] != MEMC_UpdateFlags[FlagsOffset]))
+    if((flags & ROWFUNC_FORCE) || (HD_UpdateFlags[FlagsOffset] != MEMC_UpdateFlags[FlagsOffset]))
     {
       VIDEO_STAT(DisplayRedraw,1,1);
-      VIDEO_STAT(DisplayRedrawForced,force,1);
+      VIDEO_STAT(DisplayRedrawForced,(flags & ROWFUNC_FORCE),1);
       VIDEO_STAT(DisplayRedrawUpdated,(HD_UpdateFlags[FlagsOffset] != MEMC_UpdateFlags[FlagsOffset]),1);
       VIDEO_STAT(DisplayBits,1,Available);
-      Updated = 1;
+      flags |= ROWFUNC_UPDATED;
       /* Process the pixels in this region, stopping at end of row/update block/Vend */
+      DHRow_BeginUpdate(state,&dhrow,Available>>1);
       const unsigned char *In = RAM+(Vptr>>3);
       unsigned int Shift = (Vptr & 7);
       for(i=0;i<Available;i+=2)
       {
         int idx = (*In >> Shift) & 3;
-        *out++ = Palette[idx];
+        DHRow_WritePixel(state,&dhrow,Palette[idx]);
         Shift += 2;
         if(Shift == 8)
         {
@@ -320,9 +340,10 @@ static int Display_RowFunc2bpp1X(ARMul_State *state,int row,HostPixel *out,int f
           In++;
         }
       }
+      DHRow_EndUpdate(state,&dhrow);
     }
     else
-      out += Available>>1;
+      DHRow_SkipPixels(state,&dhrow,Available>>1);
 
     Remaining -= Available;      
     Vptr += Available;
@@ -332,7 +353,7 @@ static int Display_RowFunc2bpp1X(ARMul_State *state,int row,HostPixel *out,int f
   DC.Vptr = Vptr;
         
   /* If we updated anything, copy over the updated flags (Done last in case the same flags block is encountered multiple times in the same row) */
-  if(Updated)
+  if((flags & (ROWFUNC_UPDATED | ROWFUNC_UPDATEFLAGS)) == (ROWFUNC_UPDATED | ROWFUNC_UPDATEFLAGS))
   {
     Vptr = startVptr;
     Remaining = startRemain;
@@ -350,10 +371,10 @@ static int Display_RowFunc2bpp1X(ARMul_State *state,int row,HostPixel *out,int f
     }
   }
 
-  return Updated;
+  return (flags & ROWFUNC_UPDATED);
 }
 
-static int Display_RowFunc4bpp1X(ARMul_State *state,int row,HostPixel *out,int force)
+static int Display_RowFunc4bpp1X(ARMul_State *state,int row,DHRow dhrow,int flags)
 {
   int i;
   HostPixel *Palette = HD.Palette;
@@ -366,11 +387,10 @@ static int Display_RowFunc4bpp1X(ARMul_State *state,int row,HostPixel *out,int f
   unsigned int Vend = (MEMC.Vend+1)<<7; /* Point to pixel after end */
   const unsigned char *RAM = (unsigned char *) MEMC.PhysRam;
   int Remaining = DC.LastHostWidth*4; /* Scale up to account for everything else counting in bits */
-  int Updated = 0;
 
   /* Sanity checks to avoid looping forever */
   if((Vptr >= Vend) || (Vstart >= Vend))
-    return;
+    return 0;
   if(Vptr >= Vend)
     Vptr = Vstart;
 
@@ -385,26 +405,28 @@ static int Display_RowFunc4bpp1X(ARMul_State *state,int row,HostPixel *out,int f
     /* Note: This is the number of available bits, not pixels */
     int Available = MIN(Remaining,MIN(((FlagsOffset+1)*8*UPDATEBLOCKSIZE)-Vptr,Vend-Vptr));
       
-    if(force || (HD_UpdateFlags[FlagsOffset] != MEMC_UpdateFlags[FlagsOffset]))
+    if((flags & ROWFUNC_FORCE) || (HD_UpdateFlags[FlagsOffset] != MEMC_UpdateFlags[FlagsOffset]))
     {
       VIDEO_STAT(DisplayRedraw,1,1);
-      VIDEO_STAT(DisplayRedrawForced,force,1);
+      VIDEO_STAT(DisplayRedrawForced,(flags & ROWFUNC_FORCE),1);
       VIDEO_STAT(DisplayRedrawUpdated,(HD_UpdateFlags[FlagsOffset] != MEMC_UpdateFlags[FlagsOffset]),1);
       VIDEO_STAT(DisplayBits,1,Available);
-      Updated = 1;
+      flags |= ROWFUNC_UPDATED;
       /* Process the pixels in this region, stopping at end of row/update block/Vend */
+      DHRow_BeginUpdate(state,&dhrow,Available>>2);
 
       /* Display will always be a multiple of 2 pixels wide, so we can simplify things a bit compared to 1/2bpp case */
       const unsigned char *In = RAM+(Vptr>>3);      
       for(i=0;i<Available;i+=8)
       {
         unsigned char Pixel = *In++;
-        *out++ = Palette[Pixel & 0xf];
-        *out++ = Palette[Pixel>>4];        
+        DHRow_WritePixel(state,&dhrow,Palette[Pixel & 0xf]);
+        DHRow_WritePixel(state,&dhrow,Palette[Pixel>>4]);
       }
+      DHRow_EndUpdate(state,&dhrow);
     }
     else
-      out += Available>>2;
+      DHRow_SkipPixels(state,&dhrow,Available>>2);
 
     Remaining -= Available;      
     Vptr += Available;
@@ -414,7 +436,7 @@ static int Display_RowFunc4bpp1X(ARMul_State *state,int row,HostPixel *out,int f
   DC.Vptr = Vptr;
         
   /* If we updated anything, copy over the updated flags (Done last in case the same flags block is encountered multiple times in the same row) */
-  if(Updated)
+  if((flags & (ROWFUNC_UPDATED | ROWFUNC_UPDATEFLAGS)) == (ROWFUNC_UPDATED | ROWFUNC_UPDATEFLAGS))
   {
     Vptr = startVptr;
     Remaining = startRemain;
@@ -432,10 +454,10 @@ static int Display_RowFunc4bpp1X(ARMul_State *state,int row,HostPixel *out,int f
     }
   }
 
-  return Updated;
+  return (flags & ROWFUNC_UPDATED);
 }
 
-static int Display_RowFunc8bpp1X(ARMul_State *state,int row,HostPixel *out,int force)
+static int Display_RowFunc8bpp1X(ARMul_State *state,int row,DHRow dhrow,int flags)
 {
   int i;
   HostPixel *Palette = HD.Palette;
@@ -447,11 +469,10 @@ static int Display_RowFunc8bpp1X(ARMul_State *state,int row,HostPixel *out,int f
   unsigned int Vend = (MEMC.Vend+1)<<7; /* Point to pixel after end */
   const unsigned char *RAM = (unsigned char *) MEMC.PhysRam;
   int Remaining = DC.LastHostWidth*8; /* Scale up to account for everything else counting in bits */
-  int Updated = 0;
 
   /* Sanity checks to avoid looping forever */
   if((Vptr >= Vend) || (Vstart >= Vend))
-    return;
+    return 0;
   if(Vptr >= Vend)
     Vptr = Vstart;
 
@@ -466,25 +487,27 @@ static int Display_RowFunc8bpp1X(ARMul_State *state,int row,HostPixel *out,int f
     /* Note: This is the number of available bits, not pixels */
     int Available = MIN(Remaining,MIN(((FlagsOffset+1)*8*UPDATEBLOCKSIZE)-Vptr,Vend-Vptr));
       
-    if(force || (HD_UpdateFlags[FlagsOffset] != MEMC_UpdateFlags[FlagsOffset]))
+    if((flags & ROWFUNC_FORCE) || (HD_UpdateFlags[FlagsOffset] != MEMC_UpdateFlags[FlagsOffset]))
     {
       VIDEO_STAT(DisplayRedraw,1,1);
       VIDEO_STAT(DisplayRedrawForced,force,1);
       VIDEO_STAT(DisplayRedrawUpdated,(HD_UpdateFlags[FlagsOffset] != MEMC_UpdateFlags[FlagsOffset]),1);
       VIDEO_STAT(DisplayBits,1,Available);
-      Updated = 1;
+      flags |= ROWFUNC_UPDATED;
       /* Process the pixels in this region, stopping at end of row/update block/Vend */
+      DHRow_BeginUpdate(state,&dhrow,Available>>3);
 
       /* Display will always be a multiple of 2 pixels wide, so we can simplify things a bit compared to 1/2bpp case */
       const unsigned char *In = RAM+(Vptr>>3);      
       for(i=0;i<Available;i+=16)
       {
-        *out++ = Palette[*In++];
-        *out++ = Palette[*In++];
+        DHRow_WritePixel(state,&dhrow,Palette[*In++]);
+        DHRow_WritePixel(state,&dhrow,Palette[*In++]);
       }
+      DHRow_EndUpdate(state,&dhrow);
     }
     else
-      out += Available>>3;
+      DHRow_SkipPixels(state,&dhrow,Available>>3);
 
     Remaining -= Available;      
     Vptr += Available;
@@ -494,7 +517,7 @@ static int Display_RowFunc8bpp1X(ARMul_State *state,int row,HostPixel *out,int f
   DC.Vptr = Vptr;
         
   /* If we updated anything, copy over the updated flags (Done last in case the same flags block is encountered multiple times in the same row) */
-  if(Updated)
+  if((flags & (ROWFUNC_UPDATED | ROWFUNC_UPDATEFLAGS)) == (ROWFUNC_UPDATED | ROWFUNC_UPDATEFLAGS))
   {
     Vptr = startVptr;
     Remaining = startRemain;
@@ -512,7 +535,7 @@ static int Display_RowFunc8bpp1X(ARMul_State *state,int row,HostPixel *out,int f
     }
   }
 
-  return Updated;
+  return (flags & ROWFUNC_UPDATED);
 }
 
 /*
@@ -521,7 +544,7 @@ static int Display_RowFunc8bpp1X(ARMul_State *state,int row,HostPixel *out,int f
 
 */
 
-static int Display_RowFunc1bpp2X(ARMul_State *state,int row,HostPixel *out,int force)
+static int Display_RowFunc1bpp2X(ARMul_State *state,int row,DHRow dhrow,int flags)
 {
   int i;
   HostPixel *Palette = HD.Palette;
@@ -533,11 +556,10 @@ static int Display_RowFunc1bpp2X(ARMul_State *state,int row,HostPixel *out,int f
   unsigned int Vend = (MEMC.Vend+1)<<7; /* Point to pixel after end */
   const unsigned char *RAM = (unsigned char *) MEMC.PhysRam;
   int Remaining = DC.LastHostWidth;
-  int Updated = 0;
 
   /* Sanity checks to avoid looping forever */
   if((Vptr >= Vend) || (Vstart >= Vend))
-    return;
+    return 0;
   if(Vptr >= Vend)
     Vptr = Vstart;
 
@@ -551,21 +573,21 @@ static int Display_RowFunc1bpp2X(ARMul_State *state,int row,HostPixel *out,int f
     unsigned int FlagsOffset = Vptr/(8*UPDATEBLOCKSIZE);
     int Available = MIN(Remaining,MIN(((FlagsOffset+1)*8*UPDATEBLOCKSIZE)-Vptr,Vend-Vptr));
       
-    if(force || (HD_UpdateFlags[FlagsOffset] != MEMC_UpdateFlags[FlagsOffset]))
+    if((flags & ROWFUNC_FORCE) || (HD_UpdateFlags[FlagsOffset] != MEMC_UpdateFlags[FlagsOffset]))
     {
       VIDEO_STAT(DisplayRedraw,1,1);
-      VIDEO_STAT(DisplayRedrawForced,force,1);
+      VIDEO_STAT(DisplayRedrawForced,(flags & ROWFUNC_FORCE),1);
       VIDEO_STAT(DisplayRedrawUpdated,(HD_UpdateFlags[FlagsOffset] != MEMC_UpdateFlags[FlagsOffset]),1);
       VIDEO_STAT(DisplayBits,1,Available);
-      Updated = 1;
+      flags |= ROWFUNC_UPDATED;
       /* Process the pixels in this region, stopping at end of row/update block/Vend */
+      DHRow_BeginUpdate(state,&dhrow,Available<<1);
       const unsigned char *In = RAM+(Vptr>>3);
       unsigned int Bit = 1<<(Vptr & 7);
       for(i=0;i<Available;i++)
       {
         int idx = (*In & Bit)?1:0;
-        out[0] = out[1] = Palette[idx];
-        out+=2;
+        DHRow_WritePixels(state,&dhrow,Palette[idx],2);
         Bit <<= 1;
         if(Bit == 256)
         {
@@ -573,9 +595,10 @@ static int Display_RowFunc1bpp2X(ARMul_State *state,int row,HostPixel *out,int f
           In++;
         }
       }
+      DHRow_EndUpdate(state,&dhrow);
     }
     else
-      out += Available<<1;
+      DHRow_SkipPixels(state,&dhrow,Available<<1);
 
     Remaining -= Available;      
     Vptr += Available;
@@ -585,7 +608,7 @@ static int Display_RowFunc1bpp2X(ARMul_State *state,int row,HostPixel *out,int f
   DC.Vptr = Vptr;
         
   /* If we updated anything, copy over the updated flags (Done last in case the same flags block is encountered multiple times in the same row) */
-  if(Updated)
+  if((flags & (ROWFUNC_UPDATED | ROWFUNC_UPDATEFLAGS)) == (ROWFUNC_UPDATED | ROWFUNC_UPDATEFLAGS))
   {
     Vptr = startVptr;
     Remaining = startRemain;
@@ -603,10 +626,10 @@ static int Display_RowFunc1bpp2X(ARMul_State *state,int row,HostPixel *out,int f
     }
   }
 
-  return Updated;
+  return (flags & ROWFUNC_UPDATED);
 }
 
-static int Display_RowFunc2bpp2X(ARMul_State *state,int row,HostPixel *out,int force)
+static int Display_RowFunc2bpp2X(ARMul_State *state,int row,DHRow dhrow,int flags)
 {
   int i;
   HostPixel *Palette = HD.Palette;
@@ -618,11 +641,10 @@ static int Display_RowFunc2bpp2X(ARMul_State *state,int row,HostPixel *out,int f
   unsigned int Vend = (MEMC.Vend+1)<<7; /* Point to pixel after end */
   const unsigned char *RAM = (unsigned char *) MEMC.PhysRam;
   int Remaining = DC.LastHostWidth*2; /* Scale up to account for everything else counting in bits */
-  int Updated = 0;
 
   /* Sanity checks to avoid looping forever */
   if((Vptr >= Vend) || (Vstart >= Vend))
-    return;
+    return 0;
   if(Vptr >= Vend)
     Vptr = Vstart;
 
@@ -637,21 +659,21 @@ static int Display_RowFunc2bpp2X(ARMul_State *state,int row,HostPixel *out,int f
     /* Note: This is the number of available bits, not pixels */
     int Available = MIN(Remaining,MIN(((FlagsOffset+1)*8*UPDATEBLOCKSIZE)-Vptr,Vend-Vptr));
       
-    if(force || (HD_UpdateFlags[FlagsOffset] != MEMC_UpdateFlags[FlagsOffset]))
+    if((flags & ROWFUNC_FORCE) || (HD_UpdateFlags[FlagsOffset] != MEMC_UpdateFlags[FlagsOffset]))
     {
       VIDEO_STAT(DisplayRedraw,1,1);
-      VIDEO_STAT(DisplayRedrawForced,force,1);
+      VIDEO_STAT(DisplayRedrawForced,(flags & ROWFUNC_FORCE),1);
       VIDEO_STAT(DisplayRedrawUpdated,(HD_UpdateFlags[FlagsOffset] != MEMC_UpdateFlags[FlagsOffset]),1);
       VIDEO_STAT(DisplayBits,1,Available);
-      Updated = 1;
+      flags |= ROWFUNC_UPDATED;
       /* Process the pixels in this region, stopping at end of row/update block/Vend */
+      DHRow_BeginUpdate(state,&dhrow,Available);
       const unsigned char *In = RAM+(Vptr>>3);
       unsigned int Shift = (Vptr & 7);
       for(i=0;i<Available;i+=2)
       {
         int idx = (*In >> Shift) & 3;
-        out[0] = out[1] = Palette[idx];
-        out+=2;
+        DHRow_WritePixels(state,&dhrow,Palette[idx],2);
         Shift += 2;
         if(Shift == 8)
         {
@@ -659,9 +681,10 @@ static int Display_RowFunc2bpp2X(ARMul_State *state,int row,HostPixel *out,int f
           In++;
         }
       }
+      DHRow_EndUpdate(state,&dhrow);
     }
     else
-      out += Available;
+      DHRow_SkipPixels(state,&dhrow,Available);
 
     Remaining -= Available;      
     Vptr += Available;
@@ -671,7 +694,7 @@ static int Display_RowFunc2bpp2X(ARMul_State *state,int row,HostPixel *out,int f
   DC.Vptr = Vptr;
         
   /* If we updated anything, copy over the updated flags (Done last in case the same flags block is encountered multiple times in the same row) */
-  if(Updated)
+  if((flags & (ROWFUNC_UPDATED | ROWFUNC_UPDATEFLAGS)) == (ROWFUNC_UPDATED | ROWFUNC_UPDATEFLAGS))
   {
     Vptr = startVptr;
     Remaining = startRemain;
@@ -689,10 +712,10 @@ static int Display_RowFunc2bpp2X(ARMul_State *state,int row,HostPixel *out,int f
     }
   }
 
-  return Updated;
+  return (flags & ROWFUNC_UPDATED);
 }
 
-static int Display_RowFunc4bpp2X(ARMul_State *state,int row,HostPixel *out,int force)
+static int Display_RowFunc4bpp2X(ARMul_State *state,int row,DHRow dhrow,int flags)
 {
   int i;
   HostPixel *Palette = HD.Palette;
@@ -705,11 +728,10 @@ static int Display_RowFunc4bpp2X(ARMul_State *state,int row,HostPixel *out,int f
   unsigned int Vend = (MEMC.Vend+1)<<7; /* Point to pixel after end */
   const unsigned char *RAM = (unsigned char *) MEMC.PhysRam;
   int Remaining = DC.LastHostWidth*4; /* Scale up to account for everything else counting in bits */
-  int Updated = 0;
 
   /* Sanity checks to avoid looping forever */
   if((Vptr >= Vend) || (Vstart >= Vend))
-    return;
+    return 0;
   if(Vptr >= Vend)
     Vptr = Vstart;
 
@@ -724,27 +746,28 @@ static int Display_RowFunc4bpp2X(ARMul_State *state,int row,HostPixel *out,int f
     /* Note: This is the number of available bits, not pixels */
     int Available = MIN(Remaining,MIN(((FlagsOffset+1)*8*UPDATEBLOCKSIZE)-Vptr,Vend-Vptr));
       
-    if(force || (HD_UpdateFlags[FlagsOffset] != MEMC_UpdateFlags[FlagsOffset]))
+    if((flags & ROWFUNC_FORCE) || (HD_UpdateFlags[FlagsOffset] != MEMC_UpdateFlags[FlagsOffset]))
     {
       VIDEO_STAT(DisplayRedraw,1,1);
-      VIDEO_STAT(DisplayRedrawForced,force,1);
+      VIDEO_STAT(DisplayRedrawForced,(flags & ROWFUNC_FORCE),1);
       VIDEO_STAT(DisplayRedrawUpdated,(HD_UpdateFlags[FlagsOffset] != MEMC_UpdateFlags[FlagsOffset]),1);
       VIDEO_STAT(DisplayBits,1,Available);
-      Updated = 1;
+      flags |= ROWFUNC_UPDATED;
       /* Process the pixels in this region, stopping at end of row/update block/Vend */
+      DHRow_BeginUpdate(state,&dhrow,Available>>1);
 
       /* Display will always be a multiple of 2 pixels wide, so we can simplify things a bit compared to 1/2bpp case */
       const unsigned char *In = RAM+(Vptr>>3);      
       for(i=0;i<Available;i+=8)
       {
         unsigned char Pixel = *In++;
-        out[0] = out[1] = Palette[Pixel & 0xf];
-        out[2] = out[3] = Palette[Pixel>>4];
-        out += 4;        
+        DHRow_WritePixels(state,&dhrow,Palette[Pixel & 0xf],2);
+        DHRow_WritePixels(state,&dhrow,Palette[Pixel>>4],2);
       }
+      DHRow_EndUpdate(state,&dhrow);
     }
     else
-      out += Available>>1;
+      DHRow_SkipPixels(state,&dhrow,Available>>1);
 
     Remaining -= Available;      
     Vptr += Available;
@@ -754,7 +777,7 @@ static int Display_RowFunc4bpp2X(ARMul_State *state,int row,HostPixel *out,int f
   DC.Vptr = Vptr;
         
   /* If we updated anything, copy over the updated flags (Done last in case the same flags block is encountered multiple times in the same row) */
-  if(Updated)
+  if((flags & (ROWFUNC_UPDATED | ROWFUNC_UPDATEFLAGS)) == (ROWFUNC_UPDATED | ROWFUNC_UPDATEFLAGS))
   {
     Vptr = startVptr;
     Remaining = startRemain;
@@ -772,10 +795,10 @@ static int Display_RowFunc4bpp2X(ARMul_State *state,int row,HostPixel *out,int f
     }
   }
 
-  return Updated;
+  return (flags & ROWFUNC_UPDATED);
 }
 
-static int Display_RowFunc8bpp2X(ARMul_State *state,int row,HostPixel *out,int force)
+static int Display_RowFunc8bpp2X(ARMul_State *state,int row,DHRow dhrow,int flags)
 {
   int i;
   HostPixel *Palette = HD.Palette;
@@ -787,11 +810,10 @@ static int Display_RowFunc8bpp2X(ARMul_State *state,int row,HostPixel *out,int f
   unsigned int Vend = (MEMC.Vend+1)<<7; /* Point to pixel after end */
   const unsigned char *RAM = (unsigned char *) MEMC.PhysRam;
   int Remaining = DC.LastHostWidth*8; /* Scale up to account for everything else counting in bits */
-  int Updated = 0;
 
   /* Sanity checks to avoid looping forever */
   if((Vptr >= Vend) || (Vstart >= Vend))
-    return;
+    return 0;
   if(Vptr >= Vend)
     Vptr = Vstart;
 
@@ -806,26 +828,27 @@ static int Display_RowFunc8bpp2X(ARMul_State *state,int row,HostPixel *out,int f
     /* Note: This is the number of available bits, not pixels */
     int Available = MIN(Remaining,MIN(((FlagsOffset+1)*8*UPDATEBLOCKSIZE)-Vptr,Vend-Vptr));
       
-    if(force || (HD_UpdateFlags[FlagsOffset] != MEMC_UpdateFlags[FlagsOffset]))
+    if((flags & ROWFUNC_FORCE) || (HD_UpdateFlags[FlagsOffset] != MEMC_UpdateFlags[FlagsOffset]))
     {
       VIDEO_STAT(DisplayRedraw,1,1);
-      VIDEO_STAT(DisplayRedrawForced,force,1);
+      VIDEO_STAT(DisplayRedrawForced,(flags & ROWFUNC_FORCE),1);
       VIDEO_STAT(DisplayRedrawUpdated,(HD_UpdateFlags[FlagsOffset] != MEMC_UpdateFlags[FlagsOffset]),1);
       VIDEO_STAT(DisplayBits,1,Available);
-      Updated = 1;
+      flags |= ROWFUNC_UPDATED;
       /* Process the pixels in this region, stopping at end of row/update block/Vend */
+      DHRow_BeginUpdate(state,&dhrow,Available>>2);
 
       /* Display will always be a multiple of 2 pixels wide, so we can simplify things a bit compared to 1/2bpp case */
       const unsigned char *In = RAM+(Vptr>>3);      
       for(i=0;i<Available;i+=16)
       {
-        out[0] = out[1] = Palette[*In++];
-        out[2] = out[3] = Palette[*In++];
-        out += 4;
+        DHRow_WritePixels(state,&dhrow,Palette[*In++],2);
+        DHRow_WritePixels(state,&dhrow,Palette[*In++],2);
       }
+      DHRow_EndUpdate(state,&dhrow);
     }
     else
-      out += Available>>2;
+      DHRow_SkipPixels(state,&dhrow,Available>>2);
 
     Remaining -= Available;      
     Vptr += Available;
@@ -835,7 +858,7 @@ static int Display_RowFunc8bpp2X(ARMul_State *state,int row,HostPixel *out,int f
   DC.Vptr = Vptr;
         
   /* If we updated anything, copy over the updated flags (Done last in case the same flags block is encountered multiple times in the same row) */
-  if(Updated)
+  if((flags & (ROWFUNC_UPDATED | ROWFUNC_UPDATEFLAGS)) == (ROWFUNC_UPDATED | ROWFUNC_UPDATEFLAGS))
   {
     Vptr = startVptr;
     Remaining = startRemain;
@@ -853,7 +876,7 @@ static int Display_RowFunc8bpp2X(ARMul_State *state,int row,HostPixel *out,int f
     }
   }
 
-  return Updated;
+  return (flags & ROWFUNC_UPDATED);
 }
 
 /*
@@ -882,10 +905,11 @@ static void Display_BorderRow(ARMul_State *state,int row)
     hostend = HD.Height;
   while(hoststart < hostend)
   {
-    HostPixel *pix = DisplayKbd_GetScanline(state,hoststart++);
-    int i;
-    for(i=0;i<HD.Width;i++)
-      *pix++ = col;
+    DHRow dhrow = DHRow_BeginRow(state,hoststart++,0);
+    DHRow_BeginUpdate(state,&dhrow,HD.Width);
+    DHRow_WritePixels(state,&dhrow,col,HD.Width);
+    DHRow_EndUpdate(state,&dhrow);
+    DHRow_EndRow(state,&dhrow);
   }
 }
 
@@ -917,28 +941,30 @@ static void Display_DisplayRow(ARMul_State *state,int row)
     return;
 
   /* Handle border colour updates */
-  int force = DC.ForceRefresh;
+  int rowflags = (DC.ForceRefresh?ROWFUNC_FORCE:0);
   VIDEO_STAT(DisplayFullForce,force,1);
   HostPixel col = VIDC.BorderCol;
   
-  if(force || (HD.BorderCol[row] != col))
+  if(rowflags || (HD.BorderCol[row] != col))
   {
     VIDEO_STAT(BorderRedraw,1,1);
-    VIDEO_STAT(BorderRedrawForced,force,1);
+    VIDEO_STAT(BorderRedrawForced,rowflags,1);
     VIDEO_STAT(BorderRedrawColourChanged,(HD.BorderCol[row] != col),1);
     HD.BorderCol[row] = col;
-    int i,j;
+    int i;
     for(i=hoststart;i<hostend;i++)
     {
-      HostPixel *out = DisplayKbd_GetScanline(state,i);
-      for(j=0;j<HD.XOffset;j++)
-      {
-        out[j] = col;
-      }
-      for(j=HD.XOffset+HD.XScale*DC.LastHostWidth;j<HD.Width;j++)
-      {
-        out[j] = col;
-      }
+      DHRow dhrow = DHRow_BeginRow(state,i,0);
+      DHRow_BeginUpdate(state,&dhrow,HD.XOffset);
+      DHRow_WritePixels(state,&dhrow,col,HD.XOffset);
+      DHRow_EndUpdate(state,&dhrow);
+      int displaywidth = HD.XScale*DC.LastHostWidth;
+      DHRow_SkipPixels(state,&dhrow,displaywidth);
+      int rightborder = HD.Width-(displaywidth+HD.XOffset);
+      DHRow_BeginUpdate(state,&dhrow,rightborder);
+      DHRow_WritePixels(state,&dhrow,col,rightborder);
+      DHRow_EndUpdate(state,&dhrow);
+      DHRow_EndRow(state,&dhrow);
     }
   }
 
@@ -949,20 +975,39 @@ static void Display_DisplayRow(ARMul_State *state,int row)
   if(flags & bit)
   {
     VIDEO_STAT(DisplayRowForce,1,1);
-    force = 1;
+    rowflags = ROWFUNC_FORCE;
     HD.RefreshFlags[row>>5] = (flags &~ bit);
   }
 
-  /* Process first row, then copy into others if updated. Slow, but easy */
-  /* Note: Currently doesn't do anything with HD.XScale! */
-  HostPixel *first = DisplayKbd_GetScanline(state,hoststart++) + HD.XOffset;
-  if((RowFuncs[HD.XScale-1][(DC.VIDC_CR&0xc)>>2])(state,row,first,force))
+  DHRow dhrow = DHRow_BeginRow(state,hoststart++,HD.XOffset);
+  const Display_RowFunc rf = RowFuncs[HD.XScale-1][(DC.VIDC_CR&0xc)>>2];
+  if(hoststart == hostend)
   {
-    VIDEO_STAT(DisplayRowRedraw,1,1);
-    while(hoststart < hostend)
+    if((rf)(state,row,dhrow,rowflags | ROWFUNC_UPDATEFLAGS))
     {
-      HostPixel *next = DisplayKbd_GetScanline(state,hoststart++) + HD.XOffset;
-      memcpy(next,first,sizeof(HostPixel)*DC.LastHostWidth*HD.XScale);
+      VIDEO_STAT(DisplayRowRedraw,1,1);
+    }
+    DHRow_EndRow(state,&dhrow);
+  }
+  else
+  {
+    /* Remember current Vptr */
+    unsigned int Vptr = DC.Vptr;
+    int updated = (rf)(state,row,dhrow,rowflags);
+    DHRow_EndRow(state,&dhrow);
+    if(updated)
+    {
+      VIDEO_STAT(DisplayRowRedraw,1,1);
+      /* Call the same func again on the same source data to update the copies of this scanline */
+      while(hoststart < hostend)
+      {
+        DC.Vptr = Vptr;
+        dhrow = DHRow_BeginRow(state,hoststart++,HD.XOffset);
+        if(hoststart == hostend)
+          rowflags |= ROWFUNC_UPDATEFLAGS;
+        (rf)(state,row,dhrow,rowflags);
+        DHRow_EndRow(state,&dhrow);
+      }
     }
   }
 }
@@ -1366,20 +1411,6 @@ DisplayKbd_Init(ARMul_State *state)
   /* Call Host-specific routine */
   DisplayKbd_InitHost(state);
 
-  KBD.KbdState            = KbdState_JustStarted;
-  KBD.MouseTransEnable    = 0;
-  KBD.KeyScanEnable       = 0;
-  KBD.KeyColToSend        = -1;
-  KBD.KeyRowToSend        = -1;
-  KBD.MouseXCount         = 0;
-  KBD.MouseYCount         = 0;
-  KBD.KeyUpNDown          = 0; /* When 0 it means the key to be sent is a key down event, 1 is up */
-  KBD.HostCommand         = 0;
-  KBD.BuffOcc             = 0;
-  KBD.TimerIntHasHappened = 0; /* If using AutoKey should be 2 Otherwise it never reinitialises the event routines */
-  KBD.Leds                = 0;
-  KBD.leds_changed        = NULL;
-
   DC.ModeChanged = 1;
   DC.LastHostWidth = DC.LastHostHeight = DC.LastHostHz = -1;
   DC.DirtyPalette = 65535;
@@ -1396,9 +1427,5 @@ DisplayKbd_Init(ARMul_State *state)
   memset(HOSTDISPLAY.UpdateFlags,0,sizeof(HOSTDISPLAY.UpdateFlags)); /* Initial value in MEMC.UpdateFlags is 1 */   
 
   /* Schedule update events */
-#ifndef SYSTEM_gp2x
-  EventQ_Insert(state,ARMul_Time+POLLGAP*2,FDCHDC_Poll);
-#endif
-  EventQ_Insert(state,ARMul_Time+POLLGAP*100,Keyboard_Poll);
   EventQ_Insert(state,ARMul_Time+POLLGAP*100,Display_FrameStart);
 } /* DisplayKbd_Init */

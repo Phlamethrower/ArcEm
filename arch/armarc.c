@@ -37,11 +37,6 @@ extern char arcemDir[256];
 void arcem_exit(char* msg);
 #endif
 
-#ifdef __riscos__
-#include "kernel.h"
-#include "swis.h"
-#endif
-
 /* Page size flags */
 #define MEMC_PAGESIZE_O_4K     0
 #define MEMC_PAGESIZE_1_8K     1

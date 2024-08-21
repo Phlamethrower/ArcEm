@@ -71,7 +71,7 @@ static void MouseMoved(ARMul_State *state) {
 /*-----------------------------------------------------------------------------*/
 /* Refresh the mouse's image                                                    */
 static void RefreshMouse(ARMul_State *state) {
-  int x,y,height,offset, pix, repeat;
+  int x,y,offset, pix, repeat;
   int memptr;
   int HorizPos = (VIDC.Horiz_CursorStart-(VIDC.Horiz_DisplayStart*2))*HD.XScale+HD.XOffset;
   int Height = ((int)VIDC.Vert_CursorEnd - (int)VIDC.Vert_CursorStart)*HD.YScale;
@@ -211,7 +211,7 @@ DisplayKbd_PollHostDisplay(ARMul_State *state)
 
 /*-----------------------------------------------------------------------------*/
 int
-DisplayKbd_PollHostKbd(ARMul_State *state)
+Kbd_PollHostKbd(ARMul_State *state)
 {
   if (keyF) {
     ProcessKey(state);

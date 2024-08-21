@@ -172,7 +172,7 @@ typedef struct {
   EventQ_Func Func;    /* Function to call */
 } EventQ_Entry;
 
-#define EVENTQ_SIZE 8
+#define EVENTQ_SIZE 16
 
 /***************************************************************************\
 *                          Main emulator state                              *
@@ -198,6 +198,7 @@ typedef enum ARMStartIns {
 } ARMStartIns;
 
 typedef struct DisplayInfo DisplayInfo;
+typedef struct arch_keyboard arch_keyboard;
 
 #define Exception_IRQ R15IBIT
 #define Exception_FIQ R15FBIT
@@ -212,6 +213,7 @@ struct ARMul_State {
    ARMword AbortAddr;         /* to keep track of Prefetch aborts */
    ARMword Exception;         /* IRQ & FIQ pins */
    DisplayInfo *Display;      /* VIDC/DisplayInfo struct */
+   arch_keyboard *Kbd;        /* Keyboard struct */
    ARMword Bank;              /* the current register bank */
    unsigned NtransSig;        /* MEMC USR/SVC flag, somewhat redundant with FastMapMode */
    ARMword Base;              /* extra hand for base writeback */

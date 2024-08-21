@@ -19,6 +19,7 @@
 #ifdef HOSTFS_SUPPORT
 # include "hostfs.h"
 #endif
+#include "keyboard.h"
 
 #define MIN(a,b) ((a)<(b)?(a):(b))
 #define MAX(a,b) ((a)>(b)?(a):(b))
@@ -28,6 +29,17 @@
 struct IOCStruct ioc;
 
 static void UpdateTimerRegisters_Event(ARMul_State *state,CycleCount time);
+
+/*-----------------------------------------------------------------------------*/
+
+#ifndef SYSTEM_gp2x
+static void FDCHDC_Poll(ARMul_State *state,CycleCount nowtime)
+{
+  EventQ_RescheduleHead(state,nowtime+250,FDCHDC_Poll); /* TODO - This probably needs to be made realtime */
+  FDC_Regular(state);
+  HDC_Regular(state);
+}
+#endif
 
 /*-----------------------------------------------------------------------------*/
 void
@@ -58,6 +70,10 @@ IO_Init(ARMul_State *state)
   I2C_Init(state);
   FDC_Init(state);
   HDC_Init(state);
+  Kbd_Init(state);
+#ifndef SYSTEM_gp2x
+  EventQ_Insert(state,ARMul_Time+250,FDCHDC_Poll);
+#endif
 } /* IO_Init */
 
 /*------------------------------------------------------------------------------*/

@@ -255,7 +255,7 @@ static void MouseMoved(ARMul_State *state, int mousex, int mousey/*,XMotionEvent
 
 /*----------------------------------------------------------------------------*/
 int
-DisplayKbd_PollHostKbd(ARMul_State *state)
+Kbd_PollHostKbd(ARMul_State *state)
 {
   /* Keyboard handling */
   {

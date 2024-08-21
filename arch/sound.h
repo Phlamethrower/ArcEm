@@ -19,7 +19,7 @@ extern int Sound_Init(ARMul_State *state);
 
 extern void Sound_UpdateDMARate(ARMul_State *state);
 
-#ifdef SOUND_ENABLED
+#ifdef SOUND_SUPPORT
 /* These calls are made by DispKbdShared when the corresponding registers are updated */
 extern void Sound_SoundFreqUpdated(ARMul_State *state);
 extern void Sound_StereoUpdated(ARMul_State *state);

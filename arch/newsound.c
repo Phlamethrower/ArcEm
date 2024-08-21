@@ -16,7 +16,7 @@ unsigned long Sound_DMARate; /* How many cycles between DMA fetches */
 Sound_StereoSense eSound_StereoSense = Stereo_LeftRight;
 int Sound_FudgeRate = 0;
 
-#ifdef SOUND_ENABLED
+#ifdef SOUND_SUPPORT
 static SoundData soundTable[256];
 static ARMword channelAmount[8][2];
 unsigned int log2numchan = 0;
@@ -43,7 +43,7 @@ void Sound_UpdateDMARate(ARMul_State *state)
 //  printf("UpdateDMARate: f %d r %u -> %u\n",VIDC.SoundFreq,ARMul_EmuRate,Sound_DMARate);
 }
 
-#ifdef SOUND_ENABLED
+#ifdef SOUND_SUPPORT
 static void
 SoundInitTable(void)
 {
@@ -299,7 +299,7 @@ static const Sound_ProcessFunc processfuncs[4] =
     Sound_Process4Channel,
     Sound_Process8Channel
   };
-#endif /* SOUND_ENABLED */
+#endif /* SOUND_SUPPORT */
 
 static void Sound_DMAEvent(ARMul_State *state,CycleCount nowtime)
 {
@@ -321,7 +321,7 @@ static void Sound_DMAEvent(ARMul_State *state,CycleCount nowtime)
   EventQ_RescheduleHead(state,nowtime+next,Sound_DMAEvent);
   if(avail < 1)
     return;
-#ifdef SOUND_ENABLED
+#ifdef SOUND_SUPPORT
   /* Process the data */
   (processfuncs[log2numchan])(((unsigned char *) MEMC.PhysRam) + MEMC.Sptr,soundBuffer,avail);
   /* Pass it to the host */
@@ -356,7 +356,7 @@ static void Sound_DMAEvent(ARMul_State *state,CycleCount nowtime)
 
 int Sound_Init(ARMul_State *state)
 {
-#ifdef SOUND_ENABLED
+#ifdef SOUND_SUPPORT
   SoundInitTable();
   Sound_UpdateDMARate(state);
   EventQ_Insert(state,ARMul_Time+Sound_DMARate,Sound_DMAEvent);

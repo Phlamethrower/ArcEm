@@ -8,28 +8,10 @@
 
 #define POLLGAP 125
 
-#define KBDBUFFLEN 128
-
 #define UPDATEBLOCKSIZE 256
 
 /* Set this to something different if you're not using 16bpp output */
 typedef unsigned short HostPixel;
-
-typedef struct {
-  int KeyColToSend, KeyRowToSend, KeyUpNDown;
-} KbdEntry;
-
-typedef enum {
-  KbdState_JustStarted,
-  KbdState_SentHardReset,
-  KbdState_SentAck1,
-  KbdState_SentAck2,
-  KbdState_SentKeyByte1, /* and waiting for ack */
-  KbdState_SentKeyByte2, /* and waiting for ack */
-  KbdState_SentMouseByte1,
-  KbdState_SentMouseByte2,
-  KbdState_Idle
-} KbdStates;
 
 struct DisplayInfo {
   /* Raw VIDC registers, except where noted */
@@ -57,29 +39,6 @@ struct DisplayInfo {
     unsigned int ControlReg;
     unsigned int StereoImageReg[8];
   } Vidc;
-
-  struct arch_keyboard {
-    KbdStates KbdState;
-    /* A signed, 7-bit value stored in an unsigned char as it gets
-     * passed to keyboard transmission functions expecting an
-     * unsigned char. */
-    unsigned char MouseXCount;
-    unsigned char MouseYCount;
-    int KeyColToSend,KeyRowToSend,KeyUpNDown;
-    int Leds;
-    /* The bottom three bits of leds holds their current state.  If
-     * the bit is set the LED should be emitting. */
-    void (*leds_changed)(unsigned int leds);
-
-    /* Double buffering - update the others while sending this */
-    unsigned char MouseXToSend;
-    unsigned char MouseYToSend;
-    int MouseTransEnable,KeyScanEnable; /* When 1 allowed to transmit */
-    int HostCommand;            /* Normally 0 else the command code */
-    KbdEntry Buffer[KBDBUFFLEN];
-    int BuffOcc;
-    int TimerIntHasHappened;
-  } Kbd;
 
   struct {
     /* Values which get updated by external code */
@@ -121,8 +80,6 @@ struct DisplayInfo {
 /* Use this in gdb: state->Display->HostDisplay */
 #define HOSTDISPLAY (DISPLAYINFO.HostDisplay)
 #define DISPLAYCONTROL (DISPLAYINFO.Control)
-#define KBD (DISPLAYINFO.Kbd)
-
 
 #define VideoRelUpdateAndForce(flag, writeto, from) \
 {\
@@ -136,7 +93,6 @@ struct DisplayInfo {
 
 /* Functions each Host must provide */
 void DisplayKbd_InitHost(ARMul_State *state);
-int DisplayKbd_PollHostKbd(ARMul_State *state);
 void DisplayKbd_PollHostDisplay(ARMul_State *state); /* Called at start of each frame */
 HostPixel DisplayKbd_HostColour(ARMul_State *state,unsigned int col); /* Convert 13-bit VIDC physical colour to host format */
 void DisplayKbd_HostChangeMode(ARMul_State *state,int width,int height,int hz); /* Try and change to the given screen mode */
