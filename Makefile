@@ -104,7 +104,7 @@ SOUND_SUPPORT=yes
 SOUND_PTHREAD=no
 SRCS += amiga/wb.c amiga/arexx.c
 OBJS += amiga/wb.o amiga/arexx.o
-CFLAGS += -mcrt=newlib
+CFLAGS += -mcrt=newlib -D__LARGE64_FILES
 LDFLAGS += -mcrt=newlib
 # The following two lines are for Altivec support via libfreevec
 # Uncomment them if you are using a G4 or other PPC with Altivec

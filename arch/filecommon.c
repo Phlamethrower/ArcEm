@@ -203,7 +203,7 @@ size_t File_ReadEmu(FILE *pFile,char *pBuffer,size_t uCount)
     ret += read;
     pBuffer += read;
     uCount -= read;
-    temp = 0;
+
     if(read < count2)
       break;
   }
