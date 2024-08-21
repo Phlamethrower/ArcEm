@@ -1124,7 +1124,7 @@ static void SDD_Name(Reschedule)(ARMul_State *state,CycleCount nowtime,EventQ_Fu
 
 static void SDD_Name(FrameStart)(ARMul_State *state,CycleCount nowtime)
 {
-  static const unsigned int PixelClocks[4] = {8000000,12000000,16000000,24000000};
+  static const unsigned long PixelClocks[4] = {8000000,12000000,16000000,24000000};
 
   const unsigned int NewCR = VIDC.ControlReg;
 
@@ -1171,7 +1171,13 @@ static void SDD_Name(FrameStart)(ARMul_State *state,CycleCount nowtime)
     /* Work out new screen parameters */
     int Width = (VIDC.Horiz_DisplayEnd-VIDC.Horiz_DisplayStart)*2;
     int Height = (VIDC.Vert_DisplayEnd-VIDC.Vert_DisplayStart);
-    int FramePeriod = (VIDC.Horiz_Cycle*2+2)*(VIDC.Vert_Cycle+1);
+    if(Height <= 0)
+    {
+      /* Display output has been forced off by setting end addr before start
+         Try using border size instead */
+      Height = VIDC.Vert_BorderEnd-VIDC.Vert_BorderStart;
+    }
+    long FramePeriod = (VIDC.Horiz_Cycle*2+2)*(VIDC.Vert_Cycle+1);
     int FrameRate = PixelClocks[NewCR&3]/FramePeriod;
     
     if((Width != DC.LastHostWidth) || (Height != DC.LastHostHeight) || (FrameRate != DC.LastHostHz))
@@ -1421,7 +1427,7 @@ static void SDD_Name(VIDCPutVal)(ARMul_State *state,ARMword address, ARMword dat
 #ifdef DEBUG_VIDCREGS
       fprintf(stderr,"VIDC Vert border start register val=%d\n",val>>14);
 #endif
-      VIDC.Vert_BorderStart = (val>>14) & 0x3ff;
+      VideoRelUpdateAndForce(DC.ModeChanged,VIDC.Vert_BorderStart,((val>>14) & 0x3ff));
       break;
 
     case 0xac:
@@ -1442,7 +1448,7 @@ static void SDD_Name(VIDCPutVal)(ARMul_State *state,ARMword address, ARMword dat
 #ifdef DEBUG_VIDCREGS
       fprintf(stderr,"VIDC Vert Border end register val=%d\n",val>>14);
 #endif
-      VIDC.Vert_BorderEnd = (val>>14) & 0x3ff;
+      VideoRelUpdateAndForce(DC.ModeChanged,VIDC.Vert_BorderEnd,((val>>14) & 0x3ff));
       break;
 
     case 0xb8:

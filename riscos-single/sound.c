@@ -40,6 +40,7 @@ void shutdown_sharedsound(void);
 extern void __write_backtrace(int signo);
 void sigfunc(int sig)
 {
+	shutdown_sharedsound();
 #if 0
 	/* Dump some emulator state */
 	ARMul_State *state = &statestr;
@@ -102,13 +103,39 @@ int init_sharedsound(void)
 		return 0;
 	}
 	sound_handler_id = regs.r[0];
-	/* Install error handlers */
+	/* Install error handlers so we don't crash on exit */
 	atexit(shutdown_sharedsound);
+#ifdef __TARGET_UNIXLIB__
+	/* With UnixLib we need to use signal handlers to catch any errors.
+	   UnixLib doesn't make it very easy to get user code to run when
+	   something bad happens :( */
+	signal(SIGHUP,sigfunc);
 	signal(SIGINT,sigfunc);
+	signal(SIGQUIT,sigfunc);
+	signal(SIGILL,sigfunc);
+	signal(SIGABRT,sigfunc);
+	signal(SIGTRAP,sigfunc);
+	signal(SIGEMT,sigfunc);
+	signal(SIGFPE,sigfunc);
+	signal(SIGKILL,sigfunc);
+	signal(SIGBUS,sigfunc);
+	signal(SIGSEGV,sigfunc);
+	signal(SIGSYS,sigfunc);
+	signal(SIGPIPE,sigfunc);
+	signal(SIGALRM,sigfunc);
+	signal(SIGTERM,sigfunc);
+	signal(SIGSTOP,sigfunc);
+	signal(SIGTSTP,sigfunc);
+	signal(SIGTTIN,sigfunc);
+	signal(SIGTTOU,sigfunc);
+	signal(SIGOSERROR,sigfunc);
+#else
+	/* With SCL a simple error handler seems to do the trick */
 	regs.r[0] = 1;
 	regs.r[1] = (int) error_handler;
 	regs.r[2] = 0;
 	_kernel_swi(OS_Claim,&regs,&regs);
+#endif
 	return 0;
 }                           
 

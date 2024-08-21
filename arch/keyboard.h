@@ -152,6 +152,10 @@ typedef enum {
 
 #define KBDBUFFLEN 128
 
+#define KBD_LED_CAPSLOCK 1
+#define KBD_LED_NUMLOCK 2
+#define KBD_LED_SCROLLLOCK 4
+
 struct arch_keyboard {
   KbdStates KbdState;
   /* A signed, 7-bit value stored in an unsigned char as it gets

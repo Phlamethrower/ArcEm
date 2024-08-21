@@ -58,9 +58,9 @@ static void DoLED(const char *Text, int On, int ty, int lx)
 
 static void draw_keyboard_leds(unsigned int leds)
 {
-    DoLED("Caps Lock",   leds & 1, LEDTOPS, 0);
-    DoLED("Num Lock",    leds & 2, LEDTOPS, 90);
-    DoLED("Scroll Lock", leds & 4, LEDTOPS, 180);
+    DoLED("Caps Lock",   leds & KBD_LED_CAPSLOCK, LEDTOPS, 0);
+    DoLED("Num Lock",    leds & KBD_LED_NUMLOCK, LEDTOPS, 90);
+    DoLED("Scroll Lock", leds & KBD_LED_SCROLLLOCK, LEDTOPS, 180);
 }
 
 

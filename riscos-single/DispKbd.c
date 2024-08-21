@@ -1,15 +1,12 @@
 /* (c) David Alan Gilbert 1995-1999 - see Readme file for copying info */
 /* Display and keyboard interface for the Arc emulator */
 
-// #define MOUSEKEY XK_KP_Add
-
-#define KEYREENABLEDELAY 1000
-
 /*#define DEBUG_VIDCREGS*/
 
 #include <stdio.h>
 #include <limits.h>
 #include <time.h>
+#include <math.h>
 
 #include "kernel.h"
 #include "swis.h"
@@ -23,18 +20,24 @@
 #include "hdc63463.h"
 #include "../armemu.h"
 #include "arch/displaydev.h"
+#include "arch/ArcemConfig.h"
 
 #include "ControlPane.h"
 
 static void UpdateCursorPos(ARMul_State *state);
-static void SelectROScreenMode(int x, int y, int bpp);
+static void InitModeTable(void);
 
 static void set_cursor_palette(unsigned int *pal);
 
-static int MonitorWidth;
-static int MonitorHeight;
-int MonitorBpp;
+typedef struct {
+  int w;
+  int h;
+  int aspect; /* Aspect ratio: 1 = wide pixels, 2 = square pixels, 4 = tall pixels */
+} HostMode;
+HostMode *ModeList;
+int NumModes;
 
+static HostMode *SelectROScreenMode(int x, int y, int aspect, int *outxscale, int *outyscale);
 
 #ifndef PROFILE_ENABLED /* Profiling code uses a nasty hack to estimate program size, which will only work if we're using the wimpslot for our heap */
 const char * const __dynamic_da_name = "ArcEm Heap";
@@ -49,6 +52,8 @@ static const ARMword ModeVarsIn[5] = {
 };
 
 static ARMword ModeVarsOut[4];
+
+static int CursorXOffset=0; /* How many columns were skipped from the left edge of the cursor image */
 
 /* ------------------------------------------------------------------ */
 
@@ -70,12 +75,10 @@ static SDD_HostColour SDD_Name(Host_GetColour)(ARMul_State *state,unsigned int c
   r |= r>>4;
   g |= g>>4;
   b |= b>>4;
-#if 0
-  /* Red/blue swapped Iyonix :( */
-  return (r<<10) | (g<<5) | (b);
-#else
-  return (r) | (g<<5) | (b<<10);
-#endif
+  if(hArcemConfig.bRedBlueSwap)
+    return (r<<10) | (g<<5) | (b);
+  else
+    return (r) | (g<<5) | (b<<10);
 }  
 
 static void SDD_Name(Host_ChangeMode)(ARMul_State *state,int width,int height,int hz);
@@ -103,26 +106,43 @@ void SDD_Name(Host_PollDisplay)(ARMul_State *state);
 
 static void SDD_Name(Host_ChangeMode)(ARMul_State *state,int width,int height,int hz)
 {
-  /* TODO - Try and change mode
-     For now, just use the current mode */
-  _swix(OS_ReadVduVariables,_INR(0,1),ModeVarsIn,ModeVarsOut);
-  HD.Width = ModeVarsOut[0]+1;
-  HD.Height = ModeVarsOut[1]+1;
-  HD.XScale = 1;
-  HD.YScale = 1;
-  /* Try and detect rectangular pixel modes */
-  if((width >= height*2) && (height*2 <= HD.Height))
-    HD.YScale = 2;
-  else if((height >= width*2) && (width*2 <= HD.Width))
-    HD.XScale = 2;
-  /* Apply global 2* scaling if possible */
-  if((width*2 <= HD.Width) && (height*(HD.YScale+1) <= HD.Height))
+  /* Search the mode list for the best match */
+  int aspect;
+  if(width*2 <= height)
+    aspect = 1;
+  else if(width >= height*2)
+    aspect = 4;
+  else
+    aspect = 2;
+
+  HostMode *mode = SelectROScreenMode(width,height,aspect,&HD.XScale,&HD.YScale);
+  static HostMode *current_mode=NULL;
+  if(mode != current_mode)
   {
-    HD.XScale++;
-    HD.YScale++;
+    /* Change mode */
+    int block[6];
+    block[0] = 1;
+    block[1] = mode->w;
+    block[2] = mode->h;
+    block[3] = 4;
+    block[4] = -1;
+    block[5] = -1;
+    _swi(OS_ScreenMode, _INR(0,1), 0, &block);
+  
+    /* Remove text cursor from real RO */
+    _swi(OS_RemoveCursors,0);
+
+    current_mode = mode;
   }
+  
+  _swi(OS_ReadVduVariables,_INR(0,1),ModeVarsIn,ModeVarsOut);
+  HD.Width = ModeVarsOut[0]+1; /* Should match mode->w, mode->h, but use these just to make sure */
+  HD.Height = ModeVarsOut[1]+1;
+  
+  fprintf(stderr,"Emu mode %dx%d aspect %.1f mapped to real mode %dx%d aspect %.1f, with scale factors %dx%d\n",width,height,((float)aspect)/2.0f,mode->w,mode->h,((float)mode->aspect)/2.0f,HD.XScale,HD.YScale);
+
   /* Screen is expected to be cleared */
-  _swix(OS_WriteC,_IN(0),12);
+  _swi(OS_WriteC,_IN(0),12);
 }
 
 
@@ -153,8 +173,7 @@ static void RefreshMouse(ARMul_State *state) {
 
   height = VIDC.Vert_CursorEnd - VIDC.Vert_CursorStart;
 
-  /* TODO - Support for more cursor scales, e.g. 2x2 */
-  if(height && (height <= 16) && (HOSTDISPLAY.YScale == 2) && (HOSTDISPLAY.XScale == 1))
+  if(height && (height <= 16) && (HOSTDISPLAY.YScale >= 2))
   {
     /* line-double the cursor image */
     static ARMword double_data[2*32];
@@ -166,7 +185,39 @@ static void RefreshMouse(ARMul_State *state) {
     }
     height *= 2;
     pointer_data = double_data;
-  }    
+  }
+  CursorXOffset = 0;
+  if(height && (height <= 32) && (HOSTDISPLAY.XScale >= 2))
+  {
+    /* Double the width of the image; might not work too well */
+    static ARMword double_data[2*32];
+    int x,y;
+    char *src = (char *) pointer_data;
+    char *dest = (char *) double_data;
+    /* RISC OS tends to store the image in the right half of the buffer, so shift the image left as far as possible to avoid losing any columns
+       Note that we're only doing it 4 columns at a time here to keep the code simple */
+    for(CursorXOffset=0;CursorXOffset<16;CursorXOffset += 4)
+    {
+      for(y=0;y<height;y++)
+        if(src[y*8])
+          break;
+      if(y!=height)
+        break;
+      src++;
+    }
+    for(y=0;y<height;y++)
+    {
+      for(x=0;x<4;x++)
+      {
+        char c = *src;
+        *dest++ = ((c&0x3)*0x5) | (((c&0xc)>>2)*0x50);
+        *dest++ = (((c&0x30)>>4)*0x5) | (((c&0xc0)>>6)*0x50);
+        src++;
+      }
+      src += 4;
+    }
+    pointer_data = double_data;
+  }
 
   {
     char block[10];
@@ -213,11 +264,33 @@ SDD_Name(Host_PollDisplay)(ARMul_State *state)
 }; /* DisplayKbd_PollHostDisplay */
 
 /*-----------------------------------------------------------------------------*/
+
+static void leds_changed(unsigned int leds)
+{
+  int newstate = 0;
+  if(!(leds & KBD_LED_CAPSLOCK))
+    newstate |= 1<<4;
+  if(!(leds & KBD_LED_NUMLOCK))
+    newstate |= 1<<2;
+  if(leds & KBD_LED_SCROLLLOCK)
+    newstate |= 1<<1;
+  _swix(OS_Byte,_INR(0,2),202,newstate,0xe9);
+  _swix(OS_Byte,_IN(0),118);
+}
+
+/*-----------------------------------------------------------------------------*/
 int
 DisplayDev_Init(ARMul_State *state)
 {
-//  SelectROScreenMode(640, 480, 4);
-  SelectROScreenMode(800, 600, 4);
+  KBD.leds_changed = leds_changed;
+  leds_changed(KBD.Leds);
+
+  InitModeTable();
+
+  /* Disable escape & break have to use alt-break to quit */
+  _swi(OS_Byte,_INR(0,2),200,1,0xfe);
+  _swi(OS_Byte,_INR(0,2),247,0xaa,0);
+
   return DisplayDev_Set(state,&SDD_DisplayDev);
 } /* DisplayKbd_InitHost */
 
@@ -246,7 +319,25 @@ static void UpdateCursorPos(ARMul_State *state) {
   int xeig=_swi(OS_ReadModeVariable,_INR(0,1)|_RETURN(2),-1,4);
   int yeig=_swi(OS_ReadModeVariable,_INR(0,1)|_RETURN(2),-1,5);
 
-  internal_x=(VIDC.Horiz_CursorStart-(VIDC.Horiz_DisplayStart*2))*HOSTDISPLAY.XScale+HOSTDISPLAY.XOffset;
+  /* Calculate correct cursor position, relative to the display start */
+  internal_x = VIDC.Horiz_CursorStart+6;
+  switch(VIDC.ControlReg & 0xc)
+  {
+  case 0: /* 1bpp */
+    internal_x -= VIDC.Horiz_DisplayStart*2+19;
+    break;
+  case 4: /* 2bpp */
+    internal_x -= VIDC.Horiz_DisplayStart*2+11;
+    break;
+  case 8: /* 4bpp */
+    internal_x -= VIDC.Horiz_DisplayStart*2+7;
+    break;
+  case 12: /* 8bpp */
+    internal_x -= VIDC.Horiz_DisplayStart*2+5;
+    break;
+  }
+  internal_x+=CursorXOffset;
+  internal_x=internal_x*HOSTDISPLAY.XScale+HOSTDISPLAY.XOffset;
   internal_y=(VIDC.Vert_CursorStart-VIDC.Vert_DisplayStart)*HOSTDISPLAY.YScale+HOSTDISPLAY.YOffset;
 
   block[0]=5;
@@ -256,7 +347,7 @@ static void UpdateCursorPos(ARMul_State *state) {
     block[2] = x >> 8;
   }
   {
-    short y = (MonitorHeight-internal_y) << yeig;
+    short y = (HD.Height-internal_y) << yeig;
     block[3] = y & 255;
     block[4] = y >> 8;
   }
@@ -275,12 +366,12 @@ static void MouseMoved(ARMul_State *state, int mousex, int mousey/*,XMotionEvent
     hotspot offsets */
 
   /* We are now only using differences from the reference position */
-  if ((mousex==MonitorWidth/2) && (mousey==MonitorHeight/2)) return;
+  if ((mousex==HD.Width/2) && (mousey==HD.Height/2)) return;
 
   {
     char block[5];
-    int x=MonitorWidth/2;
-    int y=MonitorHeight/2;
+    int x=HD.Width/2;
+    int y=HD.Height/2;
 
     block[0]=3;
     block[1]=x % 256;
@@ -295,7 +386,7 @@ static void MouseMoved(ARMul_State *state, int mousex, int mousey/*,XMotionEvent
   fprintf(stderr,"MouseMoved: CursorStart=%d xmotion->x=%d\n",
           VIDC.Horiz_CursorStart,mousex);
 #endif
-  xdiff=mousex-MonitorWidth/2;
+  xdiff=mousex-HD.Width/2;
   if (KBD.MouseXCount!=0) {
     if (KBD.MouseXCount & 64) {
       signed char tmpC;
@@ -311,7 +402,7 @@ static void MouseMoved(ARMul_State *state, int mousex, int mousey/*,XMotionEvent
   if (xdiff>63) xdiff=63;
   if (xdiff<-63) xdiff=-63;
 
-  ydiff=mousey-MonitorHeight/2;
+  ydiff=mousey-HD.Height/2;
   if (KBD.MouseYCount & 64) {
     signed char tmpC;
     tmpC=KBD.MouseYCount | 128; /* Sign extend */
@@ -358,47 +449,141 @@ Kbd_PollHostKbd(ARMul_State *state)
   return 0;
 } /* DisplayKbd_PollHostKbd */
 
-
 /*-----------------------------------------------------------------------------*/
 
-static void SelectROScreenMode(int x, int y, int bpp)
+static void InitModeTable(void)
 {
-  int block[8];
-
-//  if (x<0 || x>1024 || y<0 || y>768 || bpp<0 || bpp>3)
-//    return;
-
-  if (x==MonitorWidth && y==MonitorHeight && bpp==MonitorBpp)
-    return;
-
-  printf("setting screen mode to %dx%d at %d bpp\n",x, y, bpp);
-
-  MonitorWidth  = x;
-  MonitorHeight = y;
-  MonitorBpp    = bpp;
-
-  block[0] = 1;
-  block[1] = x;
-  block[2] = y;
-  block[3] = bpp;
-  block[4] = -1;
-
-  switch (bpp)
+  int *mode_list;
+  int count;
+  int size;
+  _swi(OS_ScreenMode,_IN(0)|_IN(2)|_INR(6,7)|_OUT(7),2,0,0,0,&size);
+  size = -size;
+  mode_list = (int *) malloc(size);
+  if(!mode_list)
   {
-    case 3:
-      block[5] = 3;
-      block[6] = 255;
-      break;
-
-    default:
-      block[5] =-1;
-      break;
+    fprintf(stderr,"Failed to get memory for mode list\n");
+    exit(EXIT_FAILURE);
   }
+  _swi(OS_ScreenMode,_IN(0)|_IN(2)|_INR(6,7)|_OUT(2),2,0,mode_list,size,&count);
+  count = -count;
+  ModeList = (HostMode *) malloc(sizeof(HostMode)*count);
+  NumModes = 0;
+  int *mode = mode_list;
+  /* Convert the OS mode list into one in our own format */
+  while(count--)
+  {
+    /* Too small? */
+    if((mode[2] < hArcemConfig.iMinResX) || (mode[3] < hArcemConfig.iMinResY))
+      goto next;
+    /* Wrong colour depth? */
+    if(mode[4] != 4)
+      goto next;
+    /* Not exact scale for an LCD? */
+    if(hArcemConfig.iLCDResX)
+    {
+      /* Simply too big? */
+      if((hArcemConfig.iLCDResX < mode[2]) || (hArcemConfig.iLCDResY < mode[3]))
+        goto next;
+      /* Assume the monitor will scale it up while maintaining the aspect ratio
+         Therefore, work out how much it can scale it before it reaches the edges, and check that value */
+      float xscale = ((float)hArcemConfig.iLCDResX)/mode[2];
+      float yscale = ((float)hArcemConfig.iLCDResY)/mode[3];
+      xscale = MIN(xscale,yscale);
+      if(floor(xscale) != xscale)
+        goto next;
+    }
+    /* Already got this entry? (i.e. due to multiple framerates) */
+    int i;
+    for(i=NumModes-1;i>=0;i--)
+      if((ModeList[i].w == mode[2]) && (ModeList[i].h == mode[3]))
+        goto next;
+    /* Add it to our list */
+    ModeList[NumModes].w = mode[2];
+    ModeList[NumModes].h = mode[3];
+    if(mode[2]*2 <= mode[3])
+      ModeList[NumModes].aspect = 1;
+    else if(mode[2] >= mode[3]*2)
+      ModeList[NumModes].aspect = 4;
+    else
+      ModeList[NumModes].aspect = 2;
+    fprintf(stderr,"Added mode %dx%d aspect %.1f\n",ModeList[NumModes].w,ModeList[NumModes].h,((float)ModeList[NumModes].aspect)/2.0f);
+    NumModes++;
 
-  block[7] = -1;
-  _swix(OS_ScreenMode, _INR(0,1), 0, &block);
-
-  /* Remove text cursor from real RO */
-  _swi(OS_RemoveCursors, 0);
+  next:
+    mode += mode[0]/4;
+  }
+  free(mode_list);
 }
 
+static float ComputeFit(HostMode *mode,int x,int y,int aspect,int *outxscale,int *outyscale)
+{
+  /* Work out how best to fit the given screen into the given mode */
+  int xscale=1;
+  int yscale=1;
+
+  /* Use aspect ratios to work out right scale factors */
+  if(aspect > mode->aspect)
+  {
+    /* Emulator pixels are taller, apply Y scaling */
+    yscale = aspect/mode->aspect;
+  }
+  else if(aspect < mode->aspect)
+  {
+    /* Emulator pixels are wider, apply X scaling */
+    xscale = mode->aspect/aspect;
+    if(xscale > 2)
+    {
+      return -1.0f; /* Too much X scaling */
+    }
+  }
+
+  if((x*xscale > mode->w) || (y*yscale > mode->h))
+    return -1.0f; /* Mode not big enough */
+
+  /* Apply global 2* scaling if possible */
+  if((x*xscale*2 <= mode->w) && (y*yscale*2 <= mode->h) && (xscale < 2))
+  {
+    xscale*=2;
+    yscale*=2;
+  }
+
+  *outxscale = xscale;
+  *outyscale = yscale;
+
+  /* Work out the proportion of the screen we'll fill */
+  return ((float)(x*xscale*y*yscale))/(mode->w*mode->h);
+}
+
+static float ScaleCost(int xscale,int yscale)
+{
+  /* Estimate how much extra processing this scale factor causes */
+  return (((((float)yscale)-1.0f)*1.5f)+1.0f)*xscale; /* Y scaling (probably) has a higher cost than X scaling */
+}
+
+static HostMode *SelectROScreenMode(int x, int y, int aspect, int *outxscale,int *outyscale)
+{
+  HostMode *bestmode=NULL;
+  int bestxscale=1,bestyscale=1;
+  float bestscore=0.0f;
+  int i;
+  for(i=0;i<NumModes;i++)
+  {
+    int xscale=1,yscale=1;
+    float score = ComputeFit(&ModeList[i],x,y,aspect,&xscale,&yscale);
+    if((score > bestscore) || ((score == bestscore) && (ScaleCost(xscale,yscale) < ScaleCost(bestxscale,bestyscale))))
+    {
+      bestmode = &ModeList[i];
+      bestxscale = xscale;
+      bestyscale = yscale;
+      bestscore = score;
+    }
+  }
+  if(!bestmode)
+  {
+    fprintf(stderr,"Failed to find suitable screen mode for %dx%d, aspect %.1f\n",x,y,((float)aspect)/2.0f);
+    exit(EXIT_FAILURE);
+  }
+  *outxscale = bestxscale;
+  *outyscale = bestyscale;
+  return bestmode;
+}
