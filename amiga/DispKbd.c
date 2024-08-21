@@ -376,9 +376,6 @@ static int BorderPalEntry;
 #define MAX_DISPLAY_WIDTH 2048
 static ARMword RowBuffer[MAX_DISPLAY_WIDTH/4];
 
-/* TODO - Allow this to be configured */
-static int PDD_FrameSkip = 0;
-
 typedef struct {
 	int x,y; /* Current coordinates in pixels */
 	int width; /* Width of area being updated */
