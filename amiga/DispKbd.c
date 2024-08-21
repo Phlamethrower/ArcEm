@@ -596,7 +596,7 @@ PDD_Name(Host_PollDisplay)(ARMul_State *state)
 				window->RPort->BitMap,0,redraw_miny,
 				HD.Width,(redraw_maxy-redraw_miny)+1,0x0C0,0xff,NULL);
 		redraw_miny = INT_MAX;
-		redarw_maxy = 0;
+		redraw_maxy = 0;
 	}
 
 	pdd_refreshmouse(state);
