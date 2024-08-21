@@ -232,7 +232,7 @@ ARMul_MemoryInit(ARMul_State *state)
     fprintf(stderr,"Couldn't allocate ROMRAMChunk/EmuFuncChunk\n");
     exit(3);
   }
-  MEMC.FastMapInstrFuncOfs = ((FastMapUInt)MEMC.EmuFuncChunk)-((FastMapUInt)MEMC.ROMRAMChunk);
+  state->FastMapInstrFuncOfs = ((FastMapUInt)MEMC.EmuFuncChunk)-((FastMapUInt)MEMC.ROMRAMChunk);
   /* Get everything 256 byte aligned for FastMap to work */
   MEMC.PhysRam = (ARMword*) ((((FastMapUInt)MEMC.ROMRAMChunk)+255)&~255); /* RAM must come first for FastMap_LogRamFunc to work! */
   MEMC.ROMHigh = MEMC.PhysRam + (MEMC.RAMSize>>2);
@@ -314,7 +314,7 @@ void ARMul_MemoryExit(ARMul_State *state)
 
 static void FastMap_SetEntries(ARMword addr,ARMword *data,FastMapAccessFunc func,FastMapUInt flags,ARMword size)
 {
-  FastMapEntry *entry = FastMap_GetEntryNoWrap(addr);
+  FastMapEntry *entry = FastMap_GetEntryNoWrap(&statestr,addr);
 //  fprintf(stderr,"FastMap_SetEntries(%08x,%08x,%08x,%08x,%08x)\n",addr,data,func,flags,size);
   addr = ((FastMapUInt)data)-addr; /* Offset so we can just add the phy addr to get a pointer back */
   flags |= addr>>8;
@@ -377,7 +377,7 @@ static void ARMul_PurgeFastMapPTIdx(ARMword idx)
     }
     ARMword size=1<<(12+MEMC.PageSizeFlags);
     phys *= size;
-    FastMapEntry *entry = FastMap_GetEntryNoWrap(logadr);
+    FastMapEntry *entry = FastMap_GetEntryNoWrap(&statestr,logadr);
     
     /* To cope with multiply mapped pages (i.e. multiple physical pages mapping to the same logical page) we need to check if the page we're about to unmap is still owned by us
        If it is owned by us, we'll have to search the page tables for a replacement (if any)
@@ -492,7 +492,7 @@ static void FastMap_DMAAbleWrite(ARMword address,ARMword data)
 static ARMword FastMap_LogRamFunc(ARMul_State *state, ARMword addr,ARMword data,ARMword flags)
 {
   /* Write to DMAAble log RAM, kinda crappy */
-  ARMword *phy = FastMap_Log2Phy(FastMap_GetEntry(addr),addr&~3);
+  ARMword *phy = FastMap_Log2Phy(FastMap_GetEntry(state,addr),addr&~3);
   if(flags & FASTMAP_ACCESSFUNC_BYTE)
   {
     ARMword shift = ((addr&3)<<3);
@@ -500,7 +500,7 @@ static ARMword FastMap_LogRamFunc(ARMul_State *state, ARMword addr,ARMword data,
     data |= (*phy) &~ (0xff<<shift);
   }
   *phy = data;
-  *(FastMap_Phy2Func(phy)) = FASTMAP_CLOBBEREDFUNC;
+  *(FastMap_Phy2Func(state,phy)) = FASTMAP_CLOBBEREDFUNC;
   /* Convert pointer to physical addr, then update DMA flags */
   addr = (ARMword) (((FastMapUInt)phy)-((FastMapUInt)MEMC.PhysRam));
   FastMap_DMAAbleWrite(addr,data);
@@ -684,7 +684,7 @@ static ARMword FastMap_PhysRamFunc(ARMul_State *state, ARMword addr,ARMword data
     /* fall through... */
   case FASTMAP_ACCESSFUNC_WRITE:
     *phy = data;
-    *(FastMap_Phy2Func(phy)) = FASTMAP_CLOBBEREDFUNC;
+    *(FastMap_Phy2Func(state,phy)) = FASTMAP_CLOBBEREDFUNC;
     if(addr < 512*1024)
       FastMap_DMAAbleWrite(addr,data);
     return 0;
@@ -855,7 +855,7 @@ static void ARMul_RebuildFastMap(void)
     FastMap_SetEntries(MEMORY_0x3400000_R_ROM_LOW,0,FastMap_DMAFunc,FASTMAP_R_USR|FASTMAP_R_SVC|FASTMAP_R_OS|FASTMAP_W_SVC|FASTMAP_W_FUNC|FASTMAP_R_FUNC,0x400000);
 
   /* Overwrite with VIDC */
-  FastMapEntry *entry = FastMap_GetEntryNoWrap(MEMORY_0x3400000_W_VIDEOCON);
+  FastMapEntry *entry = FastMap_GetEntryNoWrap(&statestr,MEMORY_0x3400000_W_VIDEOCON);
   for(i=0;i<MEMORY_0x3600000_W_DMA_GEN-MEMORY_0x3400000_W_VIDEOCON;i+=4096)
   {
     entry->AccessFunc = FastMap_VIDCFunc;
