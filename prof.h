@@ -14,12 +14,12 @@ extern void Prof_End(const char *);
 
 #else
 
-#define Prof_Init() 0
-#define Prof_Dump() 0
-#define Prof_BeginFunc(x) 0
-#define Prof_EndFunc(x) 0
-#define Prof_Begin(x) 0
-#define Prof_End(x) 0
+#define Prof_Init() ((void) 0)
+#define Prof_Dump() ((void) 0)
+#define Prof_BeginFunc(x) ((void) 0)
+#define Prof_EndFunc(x) ((void) 0)
+#define Prof_Begin(x) ((void) 0)
+#define Prof_End(x) ((void) 0)
 
 #endif
 
