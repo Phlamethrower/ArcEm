@@ -280,7 +280,7 @@ static inline int PDD_Name(RowFunc1XSameByteAligned)(ARMul_State *state,PDD_Row 
       /* Process the pixels in this region, stopping at end of row/update block/Vend */
       int outoffset;
       ARMword *out = PDD_Name(Host_BeginUpdate)(state,&drow,Available<<3,&outoffset);
-      memcpy(((char *)out)+(outoffset>>3),RAM+Vptr,Available);
+      ByteCopy(((char *)out)+(outoffset>>3),RAM+Vptr,Available);
       PDD_Name(Host_EndUpdate)(state,&drow);
     }
     PDD_Name(Host_AdvanceRow)(state,&drow,Available<<3);

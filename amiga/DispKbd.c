@@ -388,9 +388,10 @@ static void PDD_Name(Host_ChangeMode)(ARMul_State *state,int width,int height,in
 
 static void PDD_Name(Host_SetPaletteEntry)(ARMul_State *state,int i,unsigned int phys)
 {
-	int r = (phys & 0xf)*0x11;
-	int g = ((phys>>4) & 0xf)*0x11;
-	int b = ((phys>>8) & 0xf)*0x11;
+	ULONG r = ((phys & 0xf)*0x11) << 24;
+	ULONG g = (((phys>>4) & 0xf)*0x11) << 24;
+	ULONG b = (((phys>>8) & 0xf)*0x11) << 24;
+
 	IGraphics->SetRGB32(&screen->ViewPort,i,r,g,b);
 }
 
@@ -399,9 +400,10 @@ static void PDD_Name(Host_SetBorderColour)(ARMul_State *state,unsigned int phys)
 	/* Set border palette entry */
 	if(BorderPalEntry != 256)
 	{
-		int r = (phys & 0xf)*0x11;
-		int g = ((phys>>4) & 0xf)*0x11;
-		int b = ((phys>>8) & 0xf)*0x11;
+		ULONG r = ((phys & 0xf)*0x11) << 24;
+		ULONG g = (((phys>>4) & 0xf)*0x11) << 24;
+		ULONG b = (((phys>>8) & 0xf)*0x11) << 24;
+
 		IGraphics->SetRGB32(&screen->ViewPort,BorderPalEntry,r,g,b);
 	}
 }

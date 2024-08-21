@@ -64,6 +64,12 @@ extern void DisplayDev_VSync(ARMul_State *state); /* Trigger VSync interrupt & u
 
 /* Helper functions for display devices */
 
+#ifdef HOST_BIGENDIAN
+extern void ByteCopy(char *dest,const char *src,int size);
+#else
+#define ByteCopy(A,B,C) memcpy(A,B,C)
+#endif
+
 extern void BitCopy(ARMword *dest,int destalign,const ARMword *src,int srcalign,int count);
 
 extern int GetExpandTableSize(unsigned int srcbpp,unsigned int factor);
