@@ -50,8 +50,6 @@ struct MEMCStruct memc;
 
 /*-----------------------------------------------------------------------------*/
 
-static void ARMul_RebuildFastMap(void);
-
 static ARMword ARMul_ManglePhysAddr(ARMword phy);
 
 /*------------------------------------------------------------------------------*/
@@ -621,6 +619,7 @@ static ARMword FastMap_LogRamFunc(ARMul_State *state, ARMword addr,ARMword data,
     addr = (ARMword) (((FastMapUInt)phy)-((FastMapUInt)MEMC.PhysRam));
     FastMap_DMAAbleWrite(addr,data);
   }
+  return 0;
 } 
 
 static void ARMul_RebuildFastMapPTIdx(ARMword idx)
@@ -665,7 +664,7 @@ static void ARMul_RebuildFastMapPTIdx(ARMword idx)
     phys = ARMul_ManglePhysAddr(phys<<size);
     size = 1<<size;
     ARMword flags = PPL_To_Flags[(pt>>8)&3];
-    if(phys<512*1024)
+    if((phys<512*1024) && DisplayDev_UseUpdateFlags)
     {
       /* DMAable, must use func on write */
       FastMap_SetEntries(logadr,MEMC.PhysRam+(phys>>2),FastMap_LogRamFunc,flags|FASTMAP_W_FUNC,size);
@@ -784,10 +783,7 @@ static ARMword FastMap_ROMMap1Func(ARMul_State *state, ARMword addr,ARMword data
   /* Does nothing more than set ROMMapFlag to 2 and read a word of ROM */
   MEMC.ROMMapFlag = 2;
   ARMul_RebuildFastMap();
-  data = MEMC.ROMHigh[(addr & MEMC.ROMHighMask)>>2];
-  if(flags & FASTMAP_ACCESSFUNC_BYTE)
-    data = (data>>((addr&3)<<3))&0xff;
-  return data;
+  return MEMC.ROMHigh[(addr & MEMC.ROMHighMask)>>2];
 }
 
 static ARMword FastMap_PhysRamFuncROMMap2(ARMul_State *state, ARMword addr,ARMword data,ARMword flags)
@@ -799,27 +795,20 @@ static ARMword FastMap_PhysRamFuncROMMap2(ARMul_State *state, ARMword addr,ARMwo
     ARMul_RebuildFastMap();
   }
   ARMword *phy = FastMap_Log2Phy(FastMap_GetEntry(state,addr),addr&~3);
-  switch(flags & (FASTMAP_ACCESSFUNC_WRITE|FASTMAP_ACCESSFUNC_BYTE))
-  {
-  case 0:
+  if(!(flags & FASTMAP_ACCESSFUNC_WRITE))
     return *phy;
-  case FASTMAP_ACCESSFUNC_BYTE:
-    return ((*phy)>>((addr&3)<<3))&0xff;
-  case FASTMAP_ACCESSFUNC_WRITE|FASTMAP_ACCESSFUNC_BYTE:
-    {
-      ARMword shift = ((addr&3)<<3);
-      phy = (ARMword*)(((FastMapUInt)phy)&~3);
-      data = (data&0xff)<<shift;
-      data |= (*phy) &~ (0xff<<shift);
-    }
-    /* fall through... */
-  case FASTMAP_ACCESSFUNC_WRITE:
-    *phy = data;
-    *(FastMap_Phy2Func(state,phy)) = FASTMAP_CLOBBEREDFUNC;
-    if(addr < 512*1024)
-      FastMap_DMAAbleWrite(addr,data);
-    return 0;
+  if(flags & FASTMAP_ACCESSFUNC_BYTE)
+  {
+    ARMword shift = ((addr&3)<<3);
+    phy = (ARMword*)(((FastMapUInt)phy)&~3);
+    data = (data&0xff)<<shift;
+    data |= (*phy) &~ (0xff<<shift);
   }
+  *phy = data;
+  *(FastMap_Phy2Func(state,phy)) = FASTMAP_CLOBBEREDFUNC;
+  if(addr < 512*1024)
+    FastMap_DMAAbleWrite(addr,data);
+  return 0;
 }
 
 static ARMword FastMap_PhysRamFunc(ARMul_State *state, ARMword addr,ARMword data,ARMword flags)
@@ -841,6 +830,7 @@ static ARMword FastMap_PhysRamFunc(ARMul_State *state, ARMword addr,ARMword data
     /* Update DMA flags */
     FastMap_DMAAbleWrite(addr,data);
   }
+  return 0;
 }
 
 static ARMword FastMap_ConIOFunc(ARMul_State *state, ARMword addr,ARMword data,ARMword flags)
@@ -858,10 +848,7 @@ static ARMword FastMap_ConIOFunc(ARMul_State *state, ARMword addr,ARMword data,A
     PutValIO(state,addr,data,flags&FASTMAP_ACCESSFUNC_BYTE);
     return 0;
   }
-  data = GetWord_IO(state,addr);
-  if(flags & FASTMAP_ACCESSFUNC_BYTE)
-    data = (data>>((addr&3)<<3))&0xff;
-  return data;
+  return GetWord_IO(state,addr);
 }
 
 static ARMword FastMap_VIDCFunc(ARMul_State *state, ARMword addr,ARMword data,ARMword flags)
@@ -936,7 +923,7 @@ static ARMword FastMap_MEMCFunc(ARMul_State *state, ARMword addr,ARMword data,AR
   return data;
 }
 
-static void ARMul_RebuildFastMap(void)
+void ARMul_RebuildFastMap(void)
 {
   ARMword i;
   
@@ -975,7 +962,7 @@ static void ARMul_RebuildFastMap(void)
     for(i=0;i<16*1024*1024;i+=4096)
     {
       ARMword phy = ARMul_ManglePhysAddr(i);
-      if(phy < 512*1024)
+      if((phy < 512*1024) && DisplayDev_UseUpdateFlags)
       {
         /* Lower 512K must use access func for write
            But we can use a fast function (for when the OS has correctly detected our RAM setup) or a slow one. */

@@ -18,7 +18,7 @@
 #include "filecalls.h"
 #include "displaydev.h"
 
-//#define USE_FILEBUFFER
+#define USE_FILEBUFFER
 
 /* Note: Musn't be used as a parameter to ReadEmu/WriteEmu! */
 static char temp_buf[32768];
@@ -47,11 +47,11 @@ static void ensure_buffer_size(size_t buffer_size_needed)
 
 bool filebuffer_inuse = false;
 FILE *filebuffer_file = NULL;
-size_t filebuffer_remain = 0; /* Total amount left to buffer */
-size_t filebuffer_buffered = 0; /* How much is buffered */
-size_t filebuffer_offset = 0; /* Offset within buffer */
+size_t filebuffer_remain = 0; /* Reads: Total amount left to buffer. Writes: Total amount the user said he was going to write */
+size_t filebuffer_buffered = 0; /* Reads: How much is currently in the buffer. Writes: Total amount collected by filebuffer_write() */
+size_t filebuffer_offset = 0; /* Reads/writes: Current offset within buffer */
 
-void filebuffer_fill()
+static void filebuffer_fill(void)
 {
   filebuffer_offset = 0;
   size_t temp = MIN(filebuffer_remain,MAX_FILEBUFFER);
@@ -62,7 +62,7 @@ void filebuffer_fill()
     filebuffer_remain -= filebuffer_buffered;
 }
 
-void filebuffer_initread(FILE *pFile,size_t uCount)
+static void filebuffer_initread(FILE *pFile,size_t uCount)
 {
   filebuffer_inuse = false;
   filebuffer_file = pFile;
@@ -75,7 +75,7 @@ void filebuffer_initread(FILE *pFile,size_t uCount)
   filebuffer_fill();
 }
 
-size_t filebuffer_read(char *pBuffer,size_t uCount,bool endian)
+static size_t filebuffer_read(char *pBuffer,size_t uCount,bool endian)
 {
   if(!filebuffer_inuse)
   {
@@ -106,7 +106,7 @@ size_t filebuffer_read(char *pBuffer,size_t uCount,bool endian)
   return ret;
 }
 
-void filebuffer_initwrite(FILE *pFile,size_t uCount)
+static void filebuffer_initwrite(FILE *pFile,size_t uCount)
 {
   filebuffer_inuse = false;
   filebuffer_file = pFile;
@@ -120,7 +120,7 @@ void filebuffer_initwrite(FILE *pFile,size_t uCount)
   filebuffer_offset = 0;
 }
 
-void filebuffer_write(char *pBuffer,size_t uCount,bool endian)
+static void filebuffer_write(char *pBuffer,size_t uCount,bool endian)
 {
   if(filebuffer_remain == filebuffer_buffered)
     return;
@@ -162,7 +162,7 @@ void filebuffer_write(char *pBuffer,size_t uCount,bool endian)
   }
 }
 
-size_t filebuffer_endwrite()
+static size_t filebuffer_endwrite(void)
 {
   if(filebuffer_inuse && filebuffer_offset)
   {
@@ -189,7 +189,10 @@ size_t File_ReadEmu(FILE *pFile,char *pBuffer,size_t uCount)
 {
 #ifdef HOST_BIGENDIAN
   /* The only way to safely read the data without running the risk of corrupting
-     the destination buffer is to read into the temp buffer. */
+     the destination buffer is to read into the temp buffer. (This is because
+     the data will need endian swapping after reading, but we can't guarantee
+     that we'll read all uCount bytes, so we can't easily pre-swap the buffer
+     to avoid losing the original contents of the first/last words) */
   size_t ret = 0;
   while(uCount > 0)
   {

@@ -16,6 +16,9 @@
 
 const DisplayDev *DisplayDev_Current = NULL;
 
+int DisplayDev_UseUpdateFlags = 1;
+int DisplayDev_AutoUpdateFlags = 0;
+
 int DisplayDev_Set(ARMul_State *state,const DisplayDev *dev)
 {
   struct Vidc_Regs Vidc;

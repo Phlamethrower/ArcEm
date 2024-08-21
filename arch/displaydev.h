@@ -49,6 +49,9 @@ struct Vidc_Regs {
 #define VIDC (*(state->Display))
 
 extern const DisplayDev *DisplayDev_Current; /* Pointer to current display device */
+extern int DisplayDev_UseUpdateFlags; /* Global flag for whether the current device is using ARMul_State.UpdateFlags */
+
+extern int DisplayDev_AutoUpdateFlags; /* Automatically select whether to use UpdateFlags or not */
 
 extern int DisplayDev_Set(ARMul_State *state,const DisplayDev *dev); /* Switch to indicated display device, returns nonzero on failure */
 

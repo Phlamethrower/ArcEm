@@ -43,6 +43,7 @@
 #include <sys/syslimits.h>
 #endif
 #include <stdbool.h>
+#include <sys/types.h>
 
 #ifdef __riscos__
 #include "kernel.h"
@@ -55,6 +56,10 @@ int __riscosify_control = 0;
 
 #define HOST_DIR_SEP_CHAR '.'
 #define HOST_DIR_SEP_STR "."
+
+/* ftello64/fseeko64 don't exist, but ftello/fseeko do */
+#define ftello64 ftello
+#define fseeko64 fseeko
 
 #else /* __riscos__ */
 
@@ -418,7 +423,9 @@ path_construct(const char *old_path, const char *ro_path,
                char *new_path, size_t len, ARMword load, ARMword exec)
 {
   const char *ro_leaf;
+#ifndef __riscos__
   char *new_suffix;
+#endif
 
   assert(old_path);
   assert(ro_path);
@@ -934,8 +941,8 @@ hostfs_open(ARMul_State *state)
   }
 
   /* Find the extent of the file */
-  fseek(open_file[idx], 0L, SEEK_END);
-  state->Reg[3] = ftell(open_file[idx]);
+  fseeko64(open_file[idx], 0uLL, SEEK_END);
+  state->Reg[3] = (ARMword) ftello64(open_file[idx]);
   rewind(open_file[idx]); /* Return to start */
 
   state->Reg[1] = idx; /* Our filing system's handle */
@@ -959,7 +966,7 @@ hostfs_getbytes(ARMul_State *state)
   dbug_hostfs("\tr4 = %u (file offset from which to get data)\n",
               state->Reg[4]);
 
-  fseek(f, (long) state->Reg[4], SEEK_SET);
+  fseeko64(f, (off64_t) state->Reg[4], SEEK_SET);
 
   File_ReadRAM(f, ptr, state->Reg[3]);
 }
@@ -979,7 +986,7 @@ hostfs_putbytes(ARMul_State *state)
   dbug_hostfs("\tr4 = %u (file offset at which to put data)\n",
               state->Reg[4]);
 
-  fseek(f, (long) state->Reg[4], SEEK_SET);
+  fseeko64(f, (off64_t) state->Reg[4], SEEK_SET);
 
   File_WriteRAM(f, ptr, state->Reg[3]);
 }
@@ -1035,9 +1042,9 @@ hostfs_args_7_ensure_file_size(ARMul_State *state)
   dbug_hostfs("\tr1 = %u (our file handle)\n", state->Reg[1]);
   dbug_hostfs("\tr2 = %u (size of file to ensure)\n", state->Reg[2]);
 
-  fseek(f, 0L, SEEK_END);
+  fseeko64(f, 0uLL, SEEK_END);
 
-  state->Reg[2] = (ARMword) ftell(f);
+  state->Reg[2] = (ARMword) ftello64(f);
 }
 
 static void
@@ -1056,7 +1063,7 @@ hostfs_args_8_write_zeros(ARMul_State *state)
   dbug_hostfs("\tr2 = %u (file offset at which to write)\n", state->Reg[2]);
   dbug_hostfs("\tr3 = %u (number of zero bytes to write)\n", state->Reg[3]);
 
-  fseek(f, (long) state->Reg[2], SEEK_SET);
+  fseeko64(f, (off64_t) state->Reg[2], SEEK_SET);
 
   hostfs_ensure_buffer_size(BUFSIZE);
   memset(buffer, 0, BUFSIZE);
@@ -1133,7 +1140,7 @@ hostfs_close(ARMul_State *state)
     return;
   }
 
-  /* TODO Apply the load and exec addresses */
+  /* TODO Apply the load and exec addresses if file was open for write */
 }
 
 /**

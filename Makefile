@@ -131,7 +131,7 @@ SOUND_PTHREAD=no
 OBJS += riscos-single/soundbuf.o
 # General
 EXTNROM_SUPPORT=yes
-CFLAGS += -I@ -DSYSTEM_riscos_single -Iriscos-single -mtune=xscale -march=armv5te -mthrowback
+CFLAGS += -I@ -DSYSTEM_riscos_single -Iriscos-single -mtune=xscale -march=armv5te -mthrowback -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE -D_FILE_OFFSET_BITS=64
 LDFLAGS += -static
 # Disable stack limit checks. -ffixed-sl required to prevent sl being used as temp storage, breaking unixlib and any other code that does do stack checks
 CFLAGS += -mno-apcs-stack-check -ffixed-sl -DUSE_FAKEMAIN
@@ -147,7 +147,7 @@ TARGET=!ArcEm/arcem
 endif
 
 ifeq (${SYSTEM},X)
-CFLAGS += -DSYSTEM_X -I/usr/X11R6/include
+CFLAGS += -DSYSTEM_X -I/usr/X11R6/include -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE -D_FILE_OFFSET_BITS=64
 LIBS += -L/usr/X11R6/lib -lXext -lX11
 OBJS += X/true.o X/pseudo.o
 #SOUND_SUPPORT = yes
@@ -159,10 +159,6 @@ OBJS += win/gui.o win/win.o
 LIBS += -luser32 -lgdi32 -mno-cygwin
 # Comment the following line to have a console window
 LIBS += -mwindows
-endif
-
-ifeq (${DIRECT_DISPLAY},yes)
-CFLAGS += -DDIRECT_DISPLAY
 endif
 
 ifeq (${SOUND_SUPPORT},yes)

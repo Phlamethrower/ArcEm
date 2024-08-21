@@ -6,6 +6,7 @@
 #include <limits.h>
 #include <time.h>
 #include <math.h>
+#include <ctype.h>
 
 #include "kernel.h"
 #include "swis.h"
@@ -233,7 +234,8 @@ SDD_Name(Host_PollDisplay)(ARMul_State *state)
 /* Palettised display code */
 #define PDD_Name(x) pdd_##x
 
-static int BorderPalEntry;
+static int BorderPalEntry; /* Border palette entry, or 256 if no spare entries */
+static int FakeBorderPalEntry=-1; /* Palette entry currently in use for the fake border (i.e. closest colour to real border colour; for when BorderPalEntry == 256). -1 if dirty and needs redraw. */
 
 static int PDD_FrameSkip = 0;
 
@@ -253,6 +255,9 @@ static void PDD_Name(Host_SetPaletteEntry)(ARMul_State *state,int i,unsigned int
   buf[3] = ((phys>>4) & 0xf)*0x11;
   buf[4] = ((phys>>8) & 0xf)*0x11;
   _swix(OS_Word,_INR(0,1),12,buf);
+
+  if(i == FakeBorderPalEntry)
+    FakeBorderPalEntry = -1;
 }
 
 static void PDD_Name(Host_SetBorderColour)(ARMul_State *state,unsigned int phys)
@@ -271,6 +276,10 @@ static void PDD_Name(Host_SetBorderColour)(ARMul_State *state,unsigned int phys)
     buf[0] = BorderPalEntry;
     buf[1] = 16;
     _swix(OS_Word,_INR(0,1),12,buf);
+  }
+  else
+  {
+    FakeBorderPalEntry = -1;
   }
 }
 
@@ -348,6 +357,7 @@ void PDD_Name(Host_ChangeMode)(ARMul_State *state,int width,int height,int depth
   {
     /* Disable border entry */
     BorderPalEntry = 256;
+    FakeBorderPalEntry = -1;
   }
 
   /* Calculate expansion params */
@@ -394,6 +404,23 @@ PDD_Name(Host_PollDisplay)(ARMul_State *state)
   params.XScale = HD.XScale;
   params.YScale = HD.YScale;
   Host_PollDisplay_Common(state,&params);
+  if((BorderPalEntry == 256) && (FakeBorderPalEntry == -1))
+  {
+    /* Work out what colour to use for the border */
+    _swi(ColourTrans_InvalidateCache,0);
+    unsigned int pal = ((VIDC.BorderCol & 0xf)*0x1100) | ((VIDC.BorderCol&0xf0)*0x11000) | ((VIDC.BorderCol&0xf00)*0x110000);
+    _swi(ColourTrans_ReturnColourNumber,_IN(0)|_OUT(0),pal,&FakeBorderPalEntry);
+    _swi(ColourTrans_SetColour,_IN(0)|_INR(3,4),FakeBorderPalEntry,0,0);
+    /* Now redraw */
+    int Width = (VIDC.Horiz_DisplayEnd-VIDC.Horiz_DisplayStart)*2;
+    int Height = (VIDC.Vert_DisplayEnd-VIDC.Vert_DisplayStart);
+    int xend = Width*params.XScale+params.XOffset;
+    int yend = Height*params.YScale+params.YOffset;
+    PDD_Name(Host_DrawBorderRect)(state,0,0,params.Width,params.YOffset);
+    PDD_Name(Host_DrawBorderRect)(state,0,yend,params.Width,params.Height-yend);
+    PDD_Name(Host_DrawBorderRect)(state,0,params.YOffset,params.XOffset,params.Height*params.YScale);
+    PDD_Name(Host_DrawBorderRect)(state,xend,params.YOffset,params.Width-xend,params.Height*params.YScale);
+  }
 }
 
 #undef DISPLAYINFO
@@ -405,18 +432,19 @@ PDD_Name(Host_PollDisplay)(ARMul_State *state)
 
 static void set_cursor_palette(unsigned int *pal)
 {
-    int c;
+  char buf[5];
+  int c;
 
-    for(c = 0; c < 3; c++) {
-        _swi(OS_WriteI + 19, 0);
-        _swi(OS_WriteI + c + 1, 0); /* For `real' pointer colours. */
-        _swi(OS_WriteI + 25, 0);
-        _swi(OS_WriteC, _IN(0), (pal[c] & 0xf) * 0x11);
-        _swi(OS_WriteC, _IN(0), (pal[c] >> 4 & 0xf) * 0x11);
-        _swi(OS_WriteC, _IN(0), (pal[c] >> 8 & 0xf) * 0x11);
-    }
+  buf[1] = 25;
 
-    return;
+  for(c = 0; c < 3; c++)
+  {
+    buf[0] = c+1;
+    buf[2] = (pal[c] & 0xf)*0x11;
+    buf[3] = ((pal[c]>>4) & 0xf)*0x11;
+    buf[4] = ((pal[c]>>8) & 0xf)*0x11;
+    _swix(OS_Word,_INR(0,1),12,buf);
+  }
 }
 
 /*-----------------------------------------------------------------------------*/
@@ -440,7 +468,7 @@ static void UpdateCursorPos(ARMul_State *state,const DisplayParams *params) {
     block[2] = x >> 8;
   }
   {
-    short y = (params->Height-internal_y) << ModeVarsOut[MODE_VAR_YEIG];
+    short y = ((params->Height-1)-internal_y) << ModeVarsOut[MODE_VAR_YEIG];
     block[3] = y & 255;
     block[4] = y >> 8;
   }
@@ -597,7 +625,7 @@ static void Host_PollDisplay_Common(ARMul_State *state,const DisplayParams *para
       
       const float scale = ((float)CLOCKS_PER_SEC)/1000000.0f;
       float mhz = scale*((float)(ARMul_Time-oldcycles))/((float)(nowtime2-oldtime));
-      printf("\x1e%.2fMHz %dx%d %dHz %dbpp %d:%d %dfps   \n",mhz,(VIDC.Horiz_DisplayEnd-VIDC.Horiz_DisplayStart)*2,VIDC.Vert_DisplayEnd-VIDC.Vert_DisplayStart,current_hz,1<<((VIDC.ControlReg>>2)&3),params->XScale,params->YScale,fps);
+      printf("\x1e%.2fMHz %dx%d %dHz %dbpp %d:%d %dfps %d   \n",mhz,(VIDC.Horiz_DisplayEnd-VIDC.Horiz_DisplayStart)*2,VIDC.Vert_DisplayEnd-VIDC.Vert_DisplayStart,current_hz,1<<((VIDC.ControlReg>>2)&3),params->XScale,params->YScale,fps,PDD_FrameSkip);
       oldcycles = ARMul_Time;
       oldtime = nowtime2;
       fps = 0;
@@ -827,6 +855,9 @@ static void InitModeTable(void)
     /* Too small? */
     if((mode[2] < hArcemConfig.iMinResX) || (mode[3] < hArcemConfig.iMinResY))
       goto next;
+    /* Low colour not allowed? */
+    if(hArcemConfig.bNoLowColour && (mode[4] < 3))
+      goto next;
     /* Not exact scale for an LCD? */
     if(hArcemConfig.iLCDResX)
     {
@@ -948,6 +979,7 @@ static HostMode *SelectROScreenMode(int x, int y, int aspect, int depths, int *o
 
 #ifdef ENABLE_MENU
 typedef struct {
+  const char label;
   const char *name;
   const char **values;
   int *val;
@@ -955,22 +987,24 @@ typedef struct {
 
 static const char *values_bool[] = {"Off","On",NULL};
 static const char *values_display[] = {"Palettised","16bpp",NULL};
-static const char *values_skip[] = {"0","1","2","3","4",NULL};
+static const char *values_skip[] = {"0","1","2","3","4","5","6","7","8","9","10",NULL};
 
 static const menu_item items[] =
 {
-  {"Display driver",values_display,&hArcemConfig.eDisplayDriver},
-  {"Red/blue swap 16bpp output",values_bool,&hArcemConfig.bRedBlueSwap},
-  {"Palettised output frameskip",values_skip,&PDD_FrameSkip},
-  {"Aspect ratio correction",values_bool,&hArcemConfig.bAspectRatioCorrection},
-  {"2X upscaling",values_bool,&hArcemConfig.bUpscale},
-  {"Take screenshots on Print Screen",values_bool,&enable_screenshots},
-  {"Show stats",values_bool,&enable_stats},
+  {'1',"Display driver",values_display,(int *) &hArcemConfig.eDisplayDriver},
+  {'2',"Red/blue swap 16bpp output",values_bool,&hArcemConfig.bRedBlueSwap},
+  {'3',"Palettised auto UpdateFlags",values_bool,&DisplayDev_AutoUpdateFlags},
+  {'4',"Palettised uses UpdateFlags",values_bool,&DisplayDev_UseUpdateFlags},
+  {'5',"Palettised output frameskip",values_skip,&PDD_FrameSkip},
+  {'6',"Aspect ratio correction",values_bool,&hArcemConfig.bAspectRatioCorrection},
+  {'7',"2X upscaling",values_bool,&hArcemConfig.bUpscale},
+  {'8',"Take screenshots on Print Screen",values_bool,&enable_screenshots},
+  {'9',"Show stats",values_bool,&enable_stats},
 #ifdef PROFILE_ENABLED
-  {"Profiling",values_bool,&enable_profile},
+  {'P',"Profiling",values_bool,&enable_profile},
 #endif
-  {"Resume",NULL,NULL},
-  {"Quit",NULL,NULL},
+  {'R',"Resume",NULL,NULL},
+  {'Q',"Quit",NULL,NULL},
 };
 
 #define ITEM_MAX (sizeof(items)/sizeof(items[0]))
@@ -985,9 +1019,9 @@ static void DrawMenu(void)
   for(i=0;i<ITEM_MAX;i++)
   {
     if(items[i].values)
-      printf("%d. [%s] %s\n",i+1,items[i].values[*items[i].val],items[i].name);
+      printf("%c. [%s] %s\n",items[i].label,items[i].values[*items[i].val],items[i].name);
     else
-      printf("%d. %s\n",i+1,items[i].name);
+      printf("%c. %s\n",items[i].label,items[i].name);
   }
 }
 
@@ -1010,22 +1044,32 @@ static void GoMenu(void)
   _swi(OS_Byte,_INR(0,1),15,1);
   do {
     DrawMenu();
-    unsigned int c = _swi(OS_ReadC,_RETURN(0))-'1';
-    if(c==ITEM_QUIT)
+    unsigned int c = toupper(_swi(OS_ReadC,_RETURN(0)));
+    unsigned int i;
+    for(i=0;i<ITEM_MAX;i++)
+      if(c == items[i].label)
+        break;
+    if(i==ITEM_QUIT)
     {
       exit(0);
     }
-    else if(c==ITEM_RESUME)
+    else if(i==ITEM_RESUME)
     {
       break;
     }
-    else if(c<ITEM_MAX)
+    else if(i<ITEM_MAX)
     {
-      int val = *(items[c].val);
+      int val = *(items[i].val);
       val++;
-      if(!items[c].values[val])
+      if(!items[i].values[val])
         val = 0;
-      *(items[c].val) = val;
+      *(items[i].val) = val;
+      if(items[i].val == &DisplayDev_AutoUpdateFlags)
+      {
+        /* Make sure these are sane */
+        DisplayDev_UseUpdateFlags = 1;
+        PDD_FrameSkip = 0;
+      }
     }
   } while(1);
   /* (re)start display device. Even if we haven't changed anything, this is needed to force the screen to be redrawn (and the mode to be reset) */
@@ -1034,6 +1078,11 @@ static void GoMenu(void)
     fprintf(stderr,"Failed to reinitialise display\n");
     exit(EXIT_FAILURE);
   }
+  /* Ensure DisplayDev_UseUpdateFlags is on for SDD */
+  if(hArcemConfig.eDisplayDriver == DisplayDriver_Standard)
+    DisplayDev_UseUpdateFlags = 1;
+  /* Rebuild fastmap for DisplayDev_UseUpdateFlags changes */
+  ARMul_RebuildFastMap();
   /* Gobble any keyboard input */
   while(_swi (ArcEmKey_GetKey, _RETURN(0))) {};
   /* Reset EmuRate */
