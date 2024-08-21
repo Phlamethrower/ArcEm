@@ -149,6 +149,7 @@ endif
 ifeq (${SYSTEM},X)
 CFLAGS += -DSYSTEM_X -I/usr/X11R6/include
 LIBS += -L/usr/X11R6/lib -lXext -lX11
+OBJS += X/true.o X/pseudo.o
 endif
 
 ifeq (${SYSTEM},win)
@@ -302,6 +303,12 @@ arch/displaydev.o: arch/displaydev.c arch/displaydev.h
 
 win/gui.o: win/gui.rc win/gui.h win/arc.ico
 	windres $*.rc -o win/gui.o
+
+X/true.o: X/true.c
+	$(CC) $(CFLAGS) -c $*.c -o X/true.o
+
+X/pseudo.o: X/pseudo.c
+	$(CC) $(CFLAGS) -c $*.c -o X/pseudo.o
 
 
 # DO NOT DELETE

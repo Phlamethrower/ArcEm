@@ -25,5 +25,6 @@ int DisplayDev_Set(ARMul_State *state,const DisplayDev *dev)
       return ret;
     DisplayDev_Current = dev;
   }
+  return 0;
 }
 

@@ -29,6 +29,7 @@ struct IOCStruct {
 
   unsigned long TimersLastUpdated;
   unsigned long NextTimerTrigger;
+  unsigned int TimerFracBit;
   unsigned int Timer0CanInt;
   unsigned int Timer1CanInt;
 

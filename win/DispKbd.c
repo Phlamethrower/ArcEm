@@ -87,6 +87,11 @@ static void SDD_Name(Host_ChangeMode)(ARMul_State *state,int width,int height,in
     HD.YScale = 2;
     HD.Height *= 2;
   }
+  else if((height >= width*2) && (width*2 <= MonitorWidth))
+  {
+    HD.XScale = 2;
+    HD.Width *= 2;
+  }
   resizeWindow(HD.Width,HD.Height);
   /* Screen is expected to be cleared */
   memset(dibbmp,0,sizeof(SDD_HostColour)*MonitorWidth*MonitorHeight);

@@ -57,7 +57,8 @@ IO_Init(ARMul_State *state)
   ioc.TimerInputLatch[3] = 0xffff;
   ioc.Timer0CanInt = ioc.Timer1CanInt = 1;
   ioc.TimersLastUpdated = -1;
-  ioc.NextTimerTrigger = ARMul_Time; 
+  ioc.NextTimerTrigger = ARMul_Time;
+  ioc.TimerFracBit = 0; 
   ioc.IOCRate = ioc.InvIOCRate = 0x10000; /* Default values shouldn't matter so much */
   EventQ_Insert(state,ARMul_Time,UpdateTimerRegisters_Event);
 
@@ -153,7 +154,10 @@ GetCurrentTimerVal(ARMul_State *state,int toget)
 static void UpdateTimerRegisters_Internal(ARMul_State *state,CycleCount nowtime,int idx)
 {
   CycleDiff timeSinceLastUpdate = nowtime - ioc.TimersLastUpdated;
-  CycleDiff scaledTimeSlip = (((unsigned long long) timeSinceLastUpdate) * ioc.IOCRate)>>16;
+  /* Take into account any lost fractions of an IOC tick */
+  unsigned long long TimeSlip = (((unsigned long long) timeSinceLastUpdate) * ioc.IOCRate)+ioc.TimerFracBit;
+  ioc.TimerFracBit = TimeSlip & 0xffff;
+  CycleDiff scaledTimeSlip = TimeSlip>>16;
   unsigned long tmpL;
 
   /* In theory we should be able to use MAX_CYCLES_INTO_FUTURE as our default

@@ -113,14 +113,14 @@ static void SDD_Name(Host_ChangeMode)(ARMul_State *state,int width,int height,in
   /* Try and detect rectangular pixel modes */
   if((width >= height*2) && (height*2 <= HD.Height))
     HD.YScale = 2;
-#if 0 /* Too slow at the moment, mainly due to lame vertical scaling */
+  else if((height >= width*2) && (width*2 <= HD.Width))
+    HD.XScale = 2;
   /* Apply global 2* scaling if possible */
   if((width*2 <= HD.Width) && (height*(HD.YScale+1) <= HD.Height))
   {
     HD.XScale++;
     HD.YScale++;
   }
-#endif
   /* Screen is expected to be cleared */
   _swix(OS_WriteC,_IN(0),12);
 }
