@@ -21,9 +21,6 @@
 #endif
 #include "keyboard.h"
 
-#define MIN(a,b) ((a)<(b)?(a):(b))
-#define MAX(a,b) ((a)>(b)?(a):(b))
-
 /*#define IOC_TRACE*/
 
 struct IOCStruct ioc;

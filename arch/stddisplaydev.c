@@ -1,43 +1,69 @@
+/* ArcEm standard display driver
+
+   (c) 2011 Jeffrey Lee
+
+   Part of Arcem, covered under the GNU GPL, see file COPYING for details
+*/
+
 /*
-  DispKbdShared.c
+   This file is intended to be #included directly by another source file in order to generate a working display driver.
 
-  Shared between all platform ports. Shared Parts of Display and Input
-  layer
+   Before including the file, be sure to define the following:
 
-  (c) 1996-2005 D Gilbert, P Howkins, et al
-
-  Part of Arcem, covered under the GNU GPL, see file COPYING for details
+   SDD_HostColour
+    - Data type used to store a colour value. E.g. typedef unsigned short SDD_HostColour.
+   SDD_Name(x)
+    - Macro used to convert symbol name 'x' into an instance-specific version of the symbol. e.g. #define SDD_Name(x) MySDD_##x
+   void SDD_Name(Host_PollDisplay)(ARMul_State *state)
+    - A function that the driver will call at the start of each frame.
+   SDD_HostColour SDD_Name(Host_GetColour)(ARMul_State *state,unsigned int col)
+    - A function that the driver will call in order to convert a 13-bit VIDC physical colour into a host colour
+   void SDD_Name(Host_ChangeMode)(ARMul_State *state,int width,int height,int hz)
+    - A function that the driver will call whenever the display timings have changed enough to warrant a mode change.
+    - The implementation must change to the most appropriate display mode available and fill in the Width, Height, XScale and YScale members of the HostDisplay struct to reflect the new display parameters
+   SDD_RowsAtOnce
+    - The number of source rows to process per update
+   SDD_Row
+    - A data type that acts as an iterator/accessor for a screen row. It can be as simple as a SDD_HostColour pointer if need be.
+   SDD_Row SDD_Name(Host_BeginRow)(ARMul_State *state,int row,int offset)
+    - Function to return a SDD_Row instance suitable for accessing the indicated row, starting from the given X offset
+   void SDD_Name(Host_EndRow)(ARMul_State *state,SDD_Row *row)
+    - Function to end the use of a SDD_Row
+   void SDD_Name(Host_BeginUpdate)(ARMul_State *state,SDD_Row *row,unsigned int count)
+    - Function called when the driver is about to write to 'count' pixels of the row. Implementations could use it for tracking dirty regions in the display window.
+   void SDD_Name(Host_EndUpdate)(ARMul_State *state,SDD_Row *row)
+    - Function called once the driver has finished the write operation
+   void SDD_Name(Host_SkipPixels)(ARMul_State *state,SDD_Row *row,unsigned int count)
+    - Function to skip forwards 'count' pixels in the row
+   void SDD_Name(Host_WritePixel)(ARMul_State *state,SDD_Row *row,SDD_HostColour col)
+    - Function to write a single pixel and advance to the next location. Only called between BeginUpdate & EndUpdate.
+   void SDD_Name(Host_WritePixels)(ARMul_State *state,SDD_Row *row,SDD_HostColour col,unsigned int count)
+    - Function to fill N adjacent pixels with the same colour. 'count' may be zero. Only called between BeginUpdate & EndUpdate.
+   SDD_DisplayDev
+    - The name to use for the const DisplayDev struct that will be generated
+   SDD_Stats
+    - Define this to enable the stats code.
 
 */
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 
-#include "arch/armarc.h"
-#ifdef SOUND_SUPPORT
-#include "arch/sound.h"
-#endif
-#include "../armemu.h"
 
-#define MIN(a,b) ((a)<(b)?(a):(b))
-#define MAX(a,b) ((a)>(b)?(a):(b))
 
-#define DC DISPLAYCONTROL
-#define HD HOSTDISPLAY
+/*
 
-/* How many rows for video to process at once */
-#define ROWS_AT_ONCE 1
+  Stats
 
-//#define VIDEO_STATS
+  Note - don't enable for more than one SDD instance at once, the symbol names it uses aren't unique
 
-#ifdef VIDEO_STATS
+*/
+
+#ifdef SDD_Stats
 #define VIDEO_STAT(STAT,COND,AMT) if(COND) {vidstats[vidstat_##STAT] += AMT;}
 #else
 #define VIDEO_STAT(STAT,COND,AMT) ((void)0)
 #endif
 
-#ifdef VIDEO_STATS
+#ifdef SDD_Stats
 enum vidstat {
   vidstat_BorderRedraw,
   vidstat_BorderRedrawForced,
@@ -91,11 +117,99 @@ static void vidstats_Dump(const char *c)
 
 /*
 
-  Display - Palette updates
+  Main struct
+
+  A pointer to this is placed in state->Display
 
 */
 
-static inline void Display_PaletteUpdate(ARMul_State *state,HostPixel *Palette,int num)
+struct SDD_Name(DisplayInfo) {
+  /* Raw VIDC registers - must come first! */
+  struct Vidc_Regs Vidc;
+
+  struct {
+    /* Values which get updated by external code */
+
+    unsigned int DirtyPalette; /* Bit flags of which palette entries have been modified */
+    char ModeChanged; /* Set if any registers change which may require the host to change mode. Remains set until valid mode is available from host (suspends all display output) */
+
+    /* Values that must only get updated by the event queue/screen blit code */
+    
+    char ForceRefresh; /* =1 for the entire frame if the mode has just changed */
+    char DMAEn; /* 1/0 whether video DMA is enabled for this frame */
+    char FLYBK; /* Flyback signal (i.e. whether we've triggered VSync IRQ this frame) */ 
+    int LastHostWidth,LastHostHeight,LastHostHz; /* Values we used to request host mode */
+    int LastRow; /* Row last event was scheduled to run up to */
+    int NextRow; /* Row next event is scheduled to run up to */
+    int MaxRow; /* Row to stop at for this frame */
+    unsigned int VIDC_CR; /* Control register value in use for this frame */
+    unsigned int LineRate; /* Line rate, measured in EmuRate clock cycles */
+    unsigned int Vptr; /* DMA pointer, in bits, as offset from start of phys RAM */
+    unsigned int LastVinit; /* Last Vinit, so we can sync changes with the frame start */
+  } Control;
+
+  struct {
+    /* The host must update these on calls to Host_ChangeMode */
+    int Width,Height,XScale,YScale; /* Host display mode */
+
+    /* The core handles these */
+    int XOffset,YOffset; /* X & Y offset of first display pixel in host */
+    SDD_HostColour BorderCol; /* VIDC.Border colour in host format */ 
+    SDD_HostColour Palette[256]; /* Host palette */
+    SDD_HostColour BorderCols[1024]; /* Last border colour used for each scanline */
+    unsigned int RefreshFlags[1024/32]; /* Bit flags of which display scanlines need full refresh due to Vstart/Vend/palette changes */
+    unsigned int UpdateFlags[1024][(512*1024)/UPDATEBLOCKSIZE]; /* Flags for each scanline (ouch!) */
+  } HostDisplay;
+};
+
+
+/*
+
+  General macros
+
+*/
+
+#ifdef DISPLAYINFO
+#undef DISPLAYINFO
+#endif
+#define DISPLAYINFO (*((struct SDD_Name(DisplayInfo) *) state->Display))
+
+#ifdef HOSTDISPLAY
+#undef HOSTDISPLAY
+#endif
+#define HOSTDISPLAY (DISPLAYINFO.HostDisplay)
+
+#ifdef DISPLAYCONTROL
+#undef DISPLAYCONTROL
+#endif
+#define DISPLAYCONTROL (DISPLAYINFO.Control)
+
+#ifdef DC
+#undef DC
+#endif
+#define DC DISPLAYCONTROL
+
+#ifdef HD
+#undef HD
+#endif
+#define HD HOSTDISPLAY
+
+#define VideoRelUpdateAndForce(flag, writeto, from) \
+{\
+  if ((writeto) != (from)) { \
+    (writeto) = (from);\
+    flag = 1;\
+  };\
+};
+
+
+/*
+
+  Palette update functions
+
+*/
+
+static inline void SDD_Name(PaletteUpdate)(ARMul_State *state,SDD_HostColour *Palette,int num)
 {
   /* Might be better if caller does this check? */
   if(DC.DirtyPalette)
@@ -105,14 +219,14 @@ static inline void Display_PaletteUpdate(ARMul_State *state,HostPixel *Palette,i
     {
       if(DC.DirtyPalette & (1<<i))
       {
-        Palette[i] = DisplayKbd_HostColour(state,VIDC.Palette[i]);
+        Palette[i] = SDD_Name(Host_GetColour)(state,VIDC.Palette[i]);
       }
     }
     DC.DirtyPalette = 0;
   }
 }
 
-static inline void Display_PaletteUpdate8bpp(ARMul_State *state,HostPixel *Palette)
+static inline void SDD_Name(PaletteUpdate8bpp)(ARMul_State *state,SDD_HostColour *Palette)
 {
   /* Might be better if caller does this check? */
   if(DC.DirtyPalette)
@@ -131,7 +245,7 @@ static inline void Display_PaletteUpdate8bpp(ARMul_State *state,HostPixel *Palet
         };
         for(j=0;j<16;j++)
         {
-          Palette[i+(j<<4)] = DisplayKbd_HostColour(state,Base | ExtraPal[j]);
+          Palette[i+(j<<4)] = SDD_Name(Host_GetColour)(state,Base | ExtraPal[j]);
         }
       }
     }
@@ -141,47 +255,7 @@ static inline void Display_PaletteUpdate8bpp(ARMul_State *state,HostPixel *Palet
 
 /*
 
-  Display - Host framebuffer interface
-
-*/
-
-#ifdef SYSTEM_X
-#include "X/disphost.h"
-#else
-/* The implementation here is suitable for hosts that provide direct framebuffer access, and don't require notification of any region updates */
-
-/* DHRow is a type that effectively acts as an iterator over the contents of a row/scanline in the host display
-   It should iterate from the leftmost pixel to the right, and be tolerant of being copied for passing to functions */
-typedef HostPixel *DHRow;
-
-/* Return a DHRow suitable for accessing the indicated row, starting from the given X offset */
-static inline DHRow DHRow_BeginRow(ARMul_State *state,int row,int offset)
-{
-  return DisplayKbd_GetScanline(state,row)+offset;
-}
-
-/* End the use of a DHRow instance. This will not be called for DHRow copies that were passed to the rendering functions. */
-static inline void DHRow_EndRow(ARMul_State *state,DHRow *row) { /* nothing */ };
-
-/* Indicate that we're about to begin updating 'count' pixels, starting from the current position */
-static inline void DHRow_BeginUpdate(ARMul_State *state,DHRow *row,unsigned int count) { /* nothing */ };
-
-/* Indicate that we've finished updating the pixels */
-static inline void DHRow_EndUpdate(ARMul_State *state,DHRow *row) { /* nothing */ };
-
-/* Skip ahead 'count' pixels */
-static inline void DHRow_SkipPixels(ARMul_State *state,DHRow *row,unsigned int count) { (*row) += count; }
-
-/* Write a single pixel and move ahead one */
-static inline void DHRow_WritePixel(ARMul_State *state,DHRow *row,HostPixel pix) { *(*row)++ = pix; }
-
-/* Set N consecutive pixels to the same value. 'count' may be zero. */
-static inline void DHRow_WritePixels(ARMul_State *state,DHRow *row,HostPixel pix,unsigned int count) { while(count--) *(*row)++ = pix; }
-#endif
-
-/*
-
-  Display - Screen output general
+  Screen output general
 
 */
 
@@ -189,7 +263,7 @@ static inline void DHRow_WritePixels(ARMul_State *state,DHRow *row,HostPixel pix
    'dhrow' is expected to already be pointing to the start of the display area
    Returns non-zero if the row was updated
 */
-typedef int (*Display_RowFunc)(ARMul_State *state,int row,DHRow dhrow,int flags);
+typedef int (*SDD_Name(RowFunc))(ARMul_State *state,int row,SDD_Row dhrow,int flags);
 
 
 #define ROWFUNC_FORCE 0x1 /* Force row to be fully redrawn */
@@ -199,16 +273,16 @@ typedef int (*Display_RowFunc)(ARMul_State *state,int row,DHRow dhrow,int flags)
 
 /*
 
-  Display - Screen output for 1X horizontal scaling
+  Screen output for 1X horizontal scaling
 
 */
 
-static int Display_RowFunc1bpp1X(ARMul_State *state,int row,DHRow dhrow,int flags)
+static int SDD_Name(RowFunc1bpp1X)(ARMul_State *state,int row,SDD_Row dhrow,int flags)
 {
   int i;
-  HostPixel *Palette = HD.Palette;
+  SDD_HostColour *Palette = HD.Palette;
   /* Handle palette updates */
-  Display_PaletteUpdate(state,Palette,2);
+  SDD_Name(PaletteUpdate)(state,Palette,2);
 
   unsigned int Vptr = DC.Vptr;
   unsigned int Vstart = MEMC.Vstart<<7;
@@ -240,13 +314,13 @@ static int Display_RowFunc1bpp1X(ARMul_State *state,int row,DHRow dhrow,int flag
       VIDEO_STAT(DisplayBits,1,Available);
       flags |= ROWFUNC_UPDATED;
       /* Process the pixels in this region, stopping at end of row/update block/Vend */
-      DHRow_BeginUpdate(state,&dhrow,Available);
+      SDD_Name(Host_BeginUpdate)(state,&dhrow,Available);
       const unsigned char *In = RAM+(Vptr>>3);
       unsigned int Bit = 1<<(Vptr & 7);
       for(i=0;i<Available;i++)
       {
         int idx = (*In & Bit)?1:0;
-        DHRow_WritePixel(state,&dhrow,Palette[idx]);
+        SDD_Name(Host_WritePixel)(state,&dhrow,Palette[idx]);
         Bit <<= 1;
         if(Bit == 256)
         {
@@ -254,10 +328,10 @@ static int Display_RowFunc1bpp1X(ARMul_State *state,int row,DHRow dhrow,int flag
           In++;
         }
       }
-      DHRow_EndUpdate(state,&dhrow);
+      SDD_Name(Host_EndUpdate)(state,&dhrow);
     }
     else
-      DHRow_SkipPixels(state,&dhrow,Available);
+      SDD_Name(Host_SkipPixels)(state,&dhrow,Available);
 
     Remaining -= Available;      
     Vptr += Available;
@@ -288,12 +362,12 @@ static int Display_RowFunc1bpp1X(ARMul_State *state,int row,DHRow dhrow,int flag
   return (flags & ROWFUNC_UPDATED);
 }
 
-static int Display_RowFunc2bpp1X(ARMul_State *state,int row,DHRow dhrow,int flags)
+static int SDD_Name(RowFunc2bpp1X)(ARMul_State *state,int row,SDD_Row dhrow,int flags)
 {
   int i;
-  HostPixel *Palette = HD.Palette;
+  SDD_HostColour *Palette = HD.Palette;
   /* Handle palette updates */
-  Display_PaletteUpdate(state,Palette,4);
+  SDD_Name(PaletteUpdate)(state,Palette,4);
 
   unsigned int Vptr = DC.Vptr;
   unsigned int Vstart = MEMC.Vstart<<7;
@@ -326,13 +400,13 @@ static int Display_RowFunc2bpp1X(ARMul_State *state,int row,DHRow dhrow,int flag
       VIDEO_STAT(DisplayBits,1,Available);
       flags |= ROWFUNC_UPDATED;
       /* Process the pixels in this region, stopping at end of row/update block/Vend */
-      DHRow_BeginUpdate(state,&dhrow,Available>>1);
+      SDD_Name(Host_BeginUpdate)(state,&dhrow,Available>>1);
       const unsigned char *In = RAM+(Vptr>>3);
       unsigned int Shift = (Vptr & 7);
       for(i=0;i<Available;i+=2)
       {
         int idx = (*In >> Shift) & 3;
-        DHRow_WritePixel(state,&dhrow,Palette[idx]);
+        SDD_Name(Host_WritePixel)(state,&dhrow,Palette[idx]);
         Shift += 2;
         if(Shift == 8)
         {
@@ -340,10 +414,10 @@ static int Display_RowFunc2bpp1X(ARMul_State *state,int row,DHRow dhrow,int flag
           In++;
         }
       }
-      DHRow_EndUpdate(state,&dhrow);
+      SDD_Name(Host_EndUpdate)(state,&dhrow);
     }
     else
-      DHRow_SkipPixels(state,&dhrow,Available>>1);
+      SDD_Name(Host_SkipPixels)(state,&dhrow,Available>>1);
 
     Remaining -= Available;      
     Vptr += Available;
@@ -374,12 +448,12 @@ static int Display_RowFunc2bpp1X(ARMul_State *state,int row,DHRow dhrow,int flag
   return (flags & ROWFUNC_UPDATED);
 }
 
-static int Display_RowFunc4bpp1X(ARMul_State *state,int row,DHRow dhrow,int flags)
+static int SDD_Name(RowFunc4bpp1X)(ARMul_State *state,int row,SDD_Row dhrow,int flags)
 {
   int i;
-  HostPixel *Palette = HD.Palette;
+  SDD_HostColour *Palette = HD.Palette;
   /* Handle palette updates */
-  Display_PaletteUpdate(state,Palette,16);
+  SDD_Name(PaletteUpdate)(state,Palette,16);
 
 
   unsigned int Vptr = DC.Vptr;
@@ -413,20 +487,20 @@ static int Display_RowFunc4bpp1X(ARMul_State *state,int row,DHRow dhrow,int flag
       VIDEO_STAT(DisplayBits,1,Available);
       flags |= ROWFUNC_UPDATED;
       /* Process the pixels in this region, stopping at end of row/update block/Vend */
-      DHRow_BeginUpdate(state,&dhrow,Available>>2);
+      SDD_Name(Host_BeginUpdate)(state,&dhrow,Available>>2);
 
       /* Display will always be a multiple of 2 pixels wide, so we can simplify things a bit compared to 1/2bpp case */
       const unsigned char *In = RAM+(Vptr>>3);      
       for(i=0;i<Available;i+=8)
       {
         unsigned char Pixel = *In++;
-        DHRow_WritePixel(state,&dhrow,Palette[Pixel & 0xf]);
-        DHRow_WritePixel(state,&dhrow,Palette[Pixel>>4]);
+        SDD_Name(Host_WritePixel)(state,&dhrow,Palette[Pixel & 0xf]);
+        SDD_Name(Host_WritePixel)(state,&dhrow,Palette[Pixel>>4]);
       }
-      DHRow_EndUpdate(state,&dhrow);
+      SDD_Name(Host_EndUpdate)(state,&dhrow);
     }
     else
-      DHRow_SkipPixels(state,&dhrow,Available>>2);
+      SDD_Name(Host_SkipPixels)(state,&dhrow,Available>>2);
 
     Remaining -= Available;      
     Vptr += Available;
@@ -457,12 +531,12 @@ static int Display_RowFunc4bpp1X(ARMul_State *state,int row,DHRow dhrow,int flag
   return (flags & ROWFUNC_UPDATED);
 }
 
-static int Display_RowFunc8bpp1X(ARMul_State *state,int row,DHRow dhrow,int flags)
+static int SDD_Name(RowFunc8bpp1X)(ARMul_State *state,int row,SDD_Row dhrow,int flags)
 {
   int i;
-  HostPixel *Palette = HD.Palette;
+  SDD_HostColour *Palette = HD.Palette;
   /* Handle palette updates */
-  Display_PaletteUpdate8bpp(state,Palette);
+  SDD_Name(PaletteUpdate8bpp)(state,Palette);
 
   unsigned int Vptr = DC.Vptr;
   unsigned int Vstart = MEMC.Vstart<<7;
@@ -495,19 +569,19 @@ static int Display_RowFunc8bpp1X(ARMul_State *state,int row,DHRow dhrow,int flag
       VIDEO_STAT(DisplayBits,1,Available);
       flags |= ROWFUNC_UPDATED;
       /* Process the pixels in this region, stopping at end of row/update block/Vend */
-      DHRow_BeginUpdate(state,&dhrow,Available>>3);
+      SDD_Name(Host_BeginUpdate)(state,&dhrow,Available>>3);
 
       /* Display will always be a multiple of 2 pixels wide, so we can simplify things a bit compared to 1/2bpp case */
       const unsigned char *In = RAM+(Vptr>>3);      
       for(i=0;i<Available;i+=16)
       {
-        DHRow_WritePixel(state,&dhrow,Palette[*In++]);
-        DHRow_WritePixel(state,&dhrow,Palette[*In++]);
+        SDD_Name(Host_WritePixel)(state,&dhrow,Palette[*In++]);
+        SDD_Name(Host_WritePixel)(state,&dhrow,Palette[*In++]);
       }
-      DHRow_EndUpdate(state,&dhrow);
+      SDD_Name(Host_EndUpdate)(state,&dhrow);
     }
     else
-      DHRow_SkipPixels(state,&dhrow,Available>>3);
+      SDD_Name(Host_SkipPixels)(state,&dhrow,Available>>3);
 
     Remaining -= Available;      
     Vptr += Available;
@@ -540,16 +614,16 @@ static int Display_RowFunc8bpp1X(ARMul_State *state,int row,DHRow dhrow,int flag
 
 /*
 
-  Display - Screen output for 2X horizontal scaling
+  Screen output for 2X horizontal scaling
 
 */
 
-static int Display_RowFunc1bpp2X(ARMul_State *state,int row,DHRow dhrow,int flags)
+static int SDD_Name(RowFunc1bpp2X)(ARMul_State *state,int row,SDD_Row dhrow,int flags)
 {
   int i;
-  HostPixel *Palette = HD.Palette;
+  SDD_HostColour *Palette = HD.Palette;
   /* Handle palette updates */
-  Display_PaletteUpdate(state,Palette,2);
+  SDD_Name(PaletteUpdate)(state,Palette,2);
 
   unsigned int Vptr = DC.Vptr;
   unsigned int Vstart = MEMC.Vstart<<7;
@@ -581,13 +655,13 @@ static int Display_RowFunc1bpp2X(ARMul_State *state,int row,DHRow dhrow,int flag
       VIDEO_STAT(DisplayBits,1,Available);
       flags |= ROWFUNC_UPDATED;
       /* Process the pixels in this region, stopping at end of row/update block/Vend */
-      DHRow_BeginUpdate(state,&dhrow,Available<<1);
+      SDD_Name(Host_BeginUpdate)(state,&dhrow,Available<<1);
       const unsigned char *In = RAM+(Vptr>>3);
       unsigned int Bit = 1<<(Vptr & 7);
       for(i=0;i<Available;i++)
       {
         int idx = (*In & Bit)?1:0;
-        DHRow_WritePixels(state,&dhrow,Palette[idx],2);
+        SDD_Name(Host_WritePixels)(state,&dhrow,Palette[idx],2);
         Bit <<= 1;
         if(Bit == 256)
         {
@@ -595,10 +669,10 @@ static int Display_RowFunc1bpp2X(ARMul_State *state,int row,DHRow dhrow,int flag
           In++;
         }
       }
-      DHRow_EndUpdate(state,&dhrow);
+      SDD_Name(Host_EndUpdate)(state,&dhrow);
     }
     else
-      DHRow_SkipPixels(state,&dhrow,Available<<1);
+      SDD_Name(Host_SkipPixels)(state,&dhrow,Available<<1);
 
     Remaining -= Available;      
     Vptr += Available;
@@ -629,12 +703,12 @@ static int Display_RowFunc1bpp2X(ARMul_State *state,int row,DHRow dhrow,int flag
   return (flags & ROWFUNC_UPDATED);
 }
 
-static int Display_RowFunc2bpp2X(ARMul_State *state,int row,DHRow dhrow,int flags)
+static int SDD_Name(RowFunc2bpp2X)(ARMul_State *state,int row,SDD_Row dhrow,int flags)
 {
   int i;
-  HostPixel *Palette = HD.Palette;
+  SDD_HostColour *Palette = HD.Palette;
   /* Handle palette updates */
-  Display_PaletteUpdate(state,Palette,4);
+  SDD_Name(PaletteUpdate)(state,Palette,4);
 
   unsigned int Vptr = DC.Vptr;
   unsigned int Vstart = MEMC.Vstart<<7;
@@ -667,13 +741,13 @@ static int Display_RowFunc2bpp2X(ARMul_State *state,int row,DHRow dhrow,int flag
       VIDEO_STAT(DisplayBits,1,Available);
       flags |= ROWFUNC_UPDATED;
       /* Process the pixels in this region, stopping at end of row/update block/Vend */
-      DHRow_BeginUpdate(state,&dhrow,Available);
+      SDD_Name(Host_BeginUpdate)(state,&dhrow,Available);
       const unsigned char *In = RAM+(Vptr>>3);
       unsigned int Shift = (Vptr & 7);
       for(i=0;i<Available;i+=2)
       {
         int idx = (*In >> Shift) & 3;
-        DHRow_WritePixels(state,&dhrow,Palette[idx],2);
+        SDD_Name(Host_WritePixels)(state,&dhrow,Palette[idx],2);
         Shift += 2;
         if(Shift == 8)
         {
@@ -681,10 +755,10 @@ static int Display_RowFunc2bpp2X(ARMul_State *state,int row,DHRow dhrow,int flag
           In++;
         }
       }
-      DHRow_EndUpdate(state,&dhrow);
+      SDD_Name(Host_EndUpdate)(state,&dhrow);
     }
     else
-      DHRow_SkipPixels(state,&dhrow,Available);
+      SDD_Name(Host_SkipPixels)(state,&dhrow,Available);
 
     Remaining -= Available;      
     Vptr += Available;
@@ -715,12 +789,12 @@ static int Display_RowFunc2bpp2X(ARMul_State *state,int row,DHRow dhrow,int flag
   return (flags & ROWFUNC_UPDATED);
 }
 
-static int Display_RowFunc4bpp2X(ARMul_State *state,int row,DHRow dhrow,int flags)
+static int SDD_Name(RowFunc4bpp2X)(ARMul_State *state,int row,SDD_Row dhrow,int flags)
 {
   int i;
-  HostPixel *Palette = HD.Palette;
+  SDD_HostColour *Palette = HD.Palette;
   /* Handle palette updates */
-  Display_PaletteUpdate(state,Palette,16);
+  SDD_Name(PaletteUpdate)(state,Palette,16);
 
 
   unsigned int Vptr = DC.Vptr;
@@ -754,20 +828,20 @@ static int Display_RowFunc4bpp2X(ARMul_State *state,int row,DHRow dhrow,int flag
       VIDEO_STAT(DisplayBits,1,Available);
       flags |= ROWFUNC_UPDATED;
       /* Process the pixels in this region, stopping at end of row/update block/Vend */
-      DHRow_BeginUpdate(state,&dhrow,Available>>1);
+      SDD_Name(Host_BeginUpdate)(state,&dhrow,Available>>1);
 
       /* Display will always be a multiple of 2 pixels wide, so we can simplify things a bit compared to 1/2bpp case */
       const unsigned char *In = RAM+(Vptr>>3);      
       for(i=0;i<Available;i+=8)
       {
         unsigned char Pixel = *In++;
-        DHRow_WritePixels(state,&dhrow,Palette[Pixel & 0xf],2);
-        DHRow_WritePixels(state,&dhrow,Palette[Pixel>>4],2);
+        SDD_Name(Host_WritePixels)(state,&dhrow,Palette[Pixel & 0xf],2);
+        SDD_Name(Host_WritePixels)(state,&dhrow,Palette[Pixel>>4],2);
       }
-      DHRow_EndUpdate(state,&dhrow);
+      SDD_Name(Host_EndUpdate)(state,&dhrow);
     }
     else
-      DHRow_SkipPixels(state,&dhrow,Available>>1);
+      SDD_Name(Host_SkipPixels)(state,&dhrow,Available>>1);
 
     Remaining -= Available;      
     Vptr += Available;
@@ -798,12 +872,12 @@ static int Display_RowFunc4bpp2X(ARMul_State *state,int row,DHRow dhrow,int flag
   return (flags & ROWFUNC_UPDATED);
 }
 
-static int Display_RowFunc8bpp2X(ARMul_State *state,int row,DHRow dhrow,int flags)
+static int SDD_Name(RowFunc8bpp2X)(ARMul_State *state,int row,SDD_Row dhrow,int flags)
 {
   int i;
-  HostPixel *Palette = HD.Palette;
+  SDD_HostColour *Palette = HD.Palette;
   /* Handle palette updates */
-  Display_PaletteUpdate8bpp(state,Palette);
+  SDD_Name(PaletteUpdate8bpp)(state,Palette);
 
   unsigned int Vptr = DC.Vptr;
   unsigned int Vstart = MEMC.Vstart<<7;
@@ -836,19 +910,19 @@ static int Display_RowFunc8bpp2X(ARMul_State *state,int row,DHRow dhrow,int flag
       VIDEO_STAT(DisplayBits,1,Available);
       flags |= ROWFUNC_UPDATED;
       /* Process the pixels in this region, stopping at end of row/update block/Vend */
-      DHRow_BeginUpdate(state,&dhrow,Available>>2);
+      SDD_Name(Host_BeginUpdate)(state,&dhrow,Available>>2);
 
       /* Display will always be a multiple of 2 pixels wide, so we can simplify things a bit compared to 1/2bpp case */
       const unsigned char *In = RAM+(Vptr>>3);      
       for(i=0;i<Available;i+=16)
       {
-        DHRow_WritePixels(state,&dhrow,Palette[*In++],2);
-        DHRow_WritePixels(state,&dhrow,Palette[*In++],2);
+        SDD_Name(Host_WritePixels)(state,&dhrow,Palette[*In++],2);
+        SDD_Name(Host_WritePixels)(state,&dhrow,Palette[*In++],2);
       }
-      DHRow_EndUpdate(state,&dhrow);
+      SDD_Name(Host_EndUpdate)(state,&dhrow);
     }
     else
-      DHRow_SkipPixels(state,&dhrow,Available>>2);
+      SDD_Name(Host_SkipPixels)(state,&dhrow,Available>>2);
 
     Remaining -= Available;      
     Vptr += Available;
@@ -881,22 +955,20 @@ static int Display_RowFunc8bpp2X(ARMul_State *state,int row,DHRow dhrow,int flag
 
 /*
 
-  Display - Screen output other funcs
+  Screen output other funcs
 
 */
 
-static const unsigned int PixelClocks[4] = {8000000,12000000,16000000,24000000};
-
-static void Display_BorderRow(ARMul_State *state,int row)
+static void SDD_Name(BorderRow)(ARMul_State *state,int row)
 {
   /* Render a border row */
-  HostPixel col = VIDC.BorderCol;
-  if(!DC.ForceRefresh && (HD.BorderCol[row] == col))
+  SDD_HostColour col = HD.BorderCol;
+  if(!DC.ForceRefresh && (HD.BorderCols[row] == col))
     return;
   VIDEO_STAT(BorderRedraw,1,1);
   VIDEO_STAT(BorderRedrawForced,DC.ForceRefresh,1);
-  VIDEO_STAT(BorderRedrawColourChanged,(HD.BorderCol[row] != col),1);
-  HD.BorderCol[row] = col;
+  VIDEO_STAT(BorderRedrawColourChanged,(HD.BorderCols[row] != col),1);
+  HD.BorderCols[row] = col;
   int hoststart = (row-(VIDC.Vert_DisplayStart+1))*HD.YScale+HD.YOffset;
   int hostend = hoststart + HD.YScale;
   if(hoststart < 0)
@@ -905,30 +977,30 @@ static void Display_BorderRow(ARMul_State *state,int row)
     hostend = HD.Height;
   while(hoststart < hostend)
   {
-    DHRow dhrow = DHRow_BeginRow(state,hoststart++,0);
-    DHRow_BeginUpdate(state,&dhrow,HD.Width);
-    DHRow_WritePixels(state,&dhrow,col,HD.Width);
-    DHRow_EndUpdate(state,&dhrow);
-    DHRow_EndRow(state,&dhrow);
+    SDD_Row dhrow = SDD_Name(Host_BeginRow)(state,hoststart++,0);
+    SDD_Name(Host_BeginUpdate)(state,&dhrow,HD.Width);
+    SDD_Name(Host_WritePixels)(state,&dhrow,col,HD.Width);
+    SDD_Name(Host_EndUpdate)(state,&dhrow);
+    SDD_Name(Host_EndRow)(state,&dhrow);
   }
 }
 
-static const Display_RowFunc RowFuncs[2][4] = {
+static const SDD_Name(RowFunc) RowFuncs[2][4] = {
  { /* 1X horizontal scaling */
-   Display_RowFunc1bpp1X,
-   Display_RowFunc2bpp1X,
-   Display_RowFunc4bpp1X,
-   Display_RowFunc8bpp1X
+   SDD_Name(RowFunc1bpp1X),
+   SDD_Name(RowFunc2bpp1X),
+   SDD_Name(RowFunc4bpp1X),
+   SDD_Name(RowFunc8bpp1X)
  },
  { /* 2X horizontal scaling */
-   Display_RowFunc1bpp2X,
-   Display_RowFunc2bpp2X,
-   Display_RowFunc4bpp2X,
-   Display_RowFunc8bpp2X,
+   SDD_Name(RowFunc1bpp2X),
+   SDD_Name(RowFunc2bpp2X),
+   SDD_Name(RowFunc4bpp2X),
+   SDD_Name(RowFunc8bpp2X)
  }
 };
 
-static void Display_DisplayRow(ARMul_State *state,int row)
+static void SDD_Name(DisplayRow)(ARMul_State *state,int row)
 {
   /* Render a display row */
   int hoststart = (row-(VIDC.Vert_DisplayStart+1))*HD.YScale+HD.YOffset;
@@ -943,28 +1015,28 @@ static void Display_DisplayRow(ARMul_State *state,int row)
   /* Handle border colour updates */
   int rowflags = (DC.ForceRefresh?ROWFUNC_FORCE:0);
   VIDEO_STAT(DisplayFullForce,force,1);
-  HostPixel col = VIDC.BorderCol;
+  SDD_HostColour col = HD.BorderCol;
   
-  if(rowflags || (HD.BorderCol[row] != col))
+  if(rowflags || (HD.BorderCols[row] != col))
   {
     VIDEO_STAT(BorderRedraw,1,1);
     VIDEO_STAT(BorderRedrawForced,rowflags,1);
-    VIDEO_STAT(BorderRedrawColourChanged,(HD.BorderCol[row] != col),1);
-    HD.BorderCol[row] = col;
+    VIDEO_STAT(BorderRedrawColourChanged,(HD.BorderCols[row] != col),1);
+    HD.BorderCols[row] = col;
     int i;
     for(i=hoststart;i<hostend;i++)
     {
-      DHRow dhrow = DHRow_BeginRow(state,i,0);
-      DHRow_BeginUpdate(state,&dhrow,HD.XOffset);
-      DHRow_WritePixels(state,&dhrow,col,HD.XOffset);
-      DHRow_EndUpdate(state,&dhrow);
+      SDD_Row dhrow = SDD_Name(Host_BeginRow)(state,i,0);
+      SDD_Name(Host_BeginUpdate)(state,&dhrow,HD.XOffset);
+      SDD_Name(Host_WritePixels)(state,&dhrow,col,HD.XOffset);
+      SDD_Name(Host_EndUpdate)(state,&dhrow);
       int displaywidth = HD.XScale*DC.LastHostWidth;
-      DHRow_SkipPixels(state,&dhrow,displaywidth);
+      SDD_Name(Host_SkipPixels)(state,&dhrow,displaywidth);
       int rightborder = HD.Width-(displaywidth+HD.XOffset);
-      DHRow_BeginUpdate(state,&dhrow,rightborder);
-      DHRow_WritePixels(state,&dhrow,col,rightborder);
-      DHRow_EndUpdate(state,&dhrow);
-      DHRow_EndRow(state,&dhrow);
+      SDD_Name(Host_BeginUpdate)(state,&dhrow,rightborder);
+      SDD_Name(Host_WritePixels)(state,&dhrow,col,rightborder);
+      SDD_Name(Host_EndUpdate)(state,&dhrow);
+      SDD_Name(Host_EndRow)(state,&dhrow);
     }
   }
 
@@ -979,22 +1051,22 @@ static void Display_DisplayRow(ARMul_State *state,int row)
     HD.RefreshFlags[row>>5] = (flags &~ bit);
   }
 
-  DHRow dhrow = DHRow_BeginRow(state,hoststart++,HD.XOffset);
-  const Display_RowFunc rf = RowFuncs[HD.XScale-1][(DC.VIDC_CR&0xc)>>2];
+  SDD_Row dhrow = SDD_Name(Host_BeginRow)(state,hoststart++,HD.XOffset);
+  const SDD_Name(RowFunc) rf = RowFuncs[HD.XScale-1][(DC.VIDC_CR&0xc)>>2];
   if(hoststart == hostend)
   {
     if((rf)(state,row,dhrow,rowflags | ROWFUNC_UPDATEFLAGS))
     {
       VIDEO_STAT(DisplayRowRedraw,1,1);
     }
-    DHRow_EndRow(state,&dhrow);
+    SDD_Name(Host_EndRow)(state,&dhrow);
   }
   else
   {
     /* Remember current Vptr */
     unsigned int Vptr = DC.Vptr;
     int updated = (rf)(state,row,dhrow,rowflags);
-    DHRow_EndRow(state,&dhrow);
+    SDD_Name(Host_EndRow)(state,&dhrow);
     if(updated)
     {
       VIDEO_STAT(DisplayRowRedraw,1,1);
@@ -1002,11 +1074,11 @@ static void Display_DisplayRow(ARMul_State *state,int row)
       while(hoststart < hostend)
       {
         DC.Vptr = Vptr;
-        dhrow = DHRow_BeginRow(state,hoststart++,HD.XOffset);
+        dhrow = SDD_Name(Host_BeginRow)(state,hoststart++,HD.XOffset);
         if(hoststart == hostend)
           rowflags |= ROWFUNC_UPDATEFLAGS;
         (rf)(state,row,dhrow,rowflags);
-        DHRow_EndRow(state,&dhrow);
+        SDD_Name(Host_EndRow)(state,&dhrow);
       }
     }
   }
@@ -1014,15 +1086,15 @@ static void Display_DisplayRow(ARMul_State *state,int row)
 
 /*
 
-  Display - EventQ funcs
+  EventQ funcs
 
 */
 
-static void Display_FrameEnd(ARMul_State *state,CycleCount nowtime); /* Trigger vsync interrupt */
-static void Display_FrameStart(ARMul_State *state,CycleCount nowtime); /* End of vsync, prepare for new frame */
-static void Display_RowStart(ARMul_State *state,CycleCount nowtime); /* Fill in a display/border row */
+static void SDD_Name(FrameEnd)(ARMul_State *state,CycleCount nowtime); /* Trigger vsync interrupt */
+static void SDD_Name(FrameStart)(ARMul_State *state,CycleCount nowtime); /* End of vsync, prepare for new frame */
+static void SDD_Name(RowStart)(ARMul_State *state,CycleCount nowtime); /* Fill in a display/border row */
 
-static void Display_Flyback(ARMul_State *state)
+static void SDD_Name(Flyback)(ARMul_State *state)
 {
   if(DC.FLYBK)
     return;
@@ -1033,13 +1105,13 @@ static void Display_Flyback(ARMul_State *state)
   IO_UpdateNirq(state);
 }
 
-static void Display_Reschedule(ARMul_State *state,CycleCount nowtime,EventQ_Func func,int row)
+static void SDD_Name(Reschedule)(ARMul_State *state,CycleCount nowtime,EventQ_Func func,int row)
 {
   /* Force frame end just in case registers have been poked mid-frame */
   if(row >= VIDC.Vert_Cycle+1)
   {
-    func = Display_FrameEnd;
-    Display_Flyback(state);
+    func = SDD_Name(FrameEnd);
+    SDD_Name(Flyback)(state);
   }
   int rows = row-DC.NextRow;
   if(rows < 1)
@@ -1049,8 +1121,10 @@ static void Display_Reschedule(ARMul_State *state,CycleCount nowtime,EventQ_Func
   EventQ_RescheduleHead(state,nowtime+rows*DC.LineRate,func);
 }
 
-static void Display_FrameStart(ARMul_State *state,CycleCount nowtime)
+static void SDD_Name(FrameStart)(ARMul_State *state,CycleCount nowtime)
 {
+  static const unsigned int PixelClocks[4] = {8000000,12000000,16000000,24000000};
+
   const unsigned int NewCR = VIDC.ControlReg;
 
   /* Calculate new line rate */
@@ -1109,14 +1183,14 @@ static void Display_FrameStart(ARMul_State *state,CycleCount nowtime)
       if((Width < 1) || (Height < 1))
       {
         /* Bad mode; skip straight to FrameEnd state */
-        Display_Reschedule(state,nowtime,Display_FrameEnd,(VIDC.Vert_Cycle+1));
+        SDD_Name(Reschedule)(state,nowtime,SDD_Name(FrameEnd),(VIDC.Vert_Cycle+1));
         return;
       }
       
       DC.LastHostWidth = Width;
       DC.LastHostHeight = Height;
       DC.LastHostHz = FrameRate;
-      DisplayKbd_HostChangeMode(state,Width,Height,FrameRate);
+      SDD_Name(Host_ChangeMode)(state,Width,Height,FrameRate);
 
       /* Calculate display offsets, for start of first display pixel */
       HD.XOffset = (HD.Width-Width*HD.XScale)/2;
@@ -1135,25 +1209,25 @@ static void Display_FrameStart(ARMul_State *state,CycleCount nowtime)
   DC.Vptr = MEMC.Vinit<<7;
 
   /* Schedule for first border row */
-  Display_Reschedule(state,nowtime,Display_RowStart,VIDC.Vert_BorderStart+1);
+  SDD_Name(Reschedule)(state,nowtime,SDD_Name(RowStart),VIDC.Vert_BorderStart+1);
   
   /* Update host */
-  DisplayKbd_PollHostDisplay(state);
+  SDD_Name(Host_PollDisplay)(state);
 }
 
-static void Display_FrameEnd(ARMul_State *state,CycleCount nowtime)
+static void SDD_Name(FrameEnd)(ARMul_State *state,CycleCount nowtime)
 {
   VIDEO_STAT(DisplayFrames,1,1);
 
-  Display_Flyback(state); /* Paranoia */
+  SDD_Name(Flyback)(state); /* Paranoia */
 
   /* Set up the next frame */
   DC.LastRow = 0;
   DC.NextRow = VIDC.Vert_SyncWidth+1;
-  EventQ_RescheduleHead(state,nowtime+DC.NextRow*DC.LineRate,Display_FrameStart);
+  EventQ_RescheduleHead(state,nowtime+DC.NextRow*DC.LineRate,SDD_Name(FrameStart));
 }
 
-static void Display_RowStart(ARMul_State *state,CycleCount nowtime)
+static void SDD_Name(RowStart)(ARMul_State *state,CycleCount nowtime)
 {
   int row = DC.LastRow;
   if(row < VIDC.Vert_BorderStart+1)
@@ -1165,44 +1239,42 @@ static void Display_RowStart(ARMul_State *state,CycleCount nowtime)
     if(row < (VIDC.Vert_DisplayStart+1))
     {
       /* Border region */
-      Display_BorderRow(state,row);
+      SDD_Name(BorderRow)(state,row);
     }
     else if(dmaen && (row < (VIDC.Vert_DisplayEnd+1)))
     {
       /* Display */
-      Display_DisplayRow(state,row);
+      SDD_Name(DisplayRow)(state,row);
     }
     else if(row < (VIDC.Vert_BorderEnd+1))
     {
       /* Border again */
-      Display_Flyback(state);
-      Display_BorderRow(state,row);
+      SDD_Name(Flyback)(state);
+      SDD_Name(BorderRow)(state,row);
     }
     else
     {
       /* Reached end of screen */
-      Display_Reschedule(state,nowtime,Display_FrameEnd,VIDC.Vert_Cycle+1);
+      SDD_Name(Reschedule)(state,nowtime,SDD_Name(FrameEnd),VIDC.Vert_Cycle+1);
       return;
     }
     VIDEO_STAT(DisplayRows,1,1);
     row++;
   }
   /* Skip ahead to next row */
-  int nextrow = row+ROWS_AT_ONCE;
-#if ROWS_AT_ONCE > 1
-  if((row+1 <= VIDC.Vert_Cycle+1) && (nextrow > VIDC.Vert_Cycle+1))
+  int nextrow = row+SDD_RowsAtOnce;
+  if((SDD_RowsAtOnce > 1) && (row <= VIDC.Vert_Cycle) && (nextrow > VIDC.Vert_Cycle+1))
     nextrow = VIDC.Vert_Cycle+1;
-#endif
-  Display_Reschedule(state,nowtime,Display_RowStart,nextrow);
+  SDD_Name(Reschedule)(state,nowtime,SDD_Name(RowStart),nextrow);
 }
 
 /*
 
-  Display - VIDC write handler
+  VIDC write handler
 
 */
 
-void VIDC_PutVal(ARMul_State *state,ARMword address, ARMword data,int bNw) {
+static void SDD_Name(VIDCPutVal)(ARMul_State *state,ARMword address, ARMword data,int bNw) {
   unsigned int addr, val;
 
   addr=(data>>24) & 255;
@@ -1233,7 +1305,12 @@ void VIDC_PutVal(ARMul_State *state,ARMword address, ARMword data,int bNw) {
 #ifdef DEBUG_VIDCREGS
       fprintf(stderr,"VIDC border colour write val=0x%x\n",val);
 #endif
-      VIDC.BorderCol = DisplayKbd_HostColour(state,val & 0x1fff);
+      val &= 0x1fff;
+      if(VIDC.BorderCol != val)
+      {
+        VIDC.BorderCol = val;
+        HD.BorderCol = SDD_Name(Host_GetColour)(state,val);
+      }
       break;
 
     case 0x44: /* Cursor palette log col 1 */
@@ -1401,15 +1478,19 @@ void VIDC_PutVal(ARMul_State *state,ARMword address, ARMword data,int bNw) {
 
 /*
 
-  Display - General
+  DisplayDev wrapper
 
 */
 
-void
-DisplayKbd_Init(ARMul_State *state)
+static int SDD_Name(Init)(ARMul_State *state,const struct Vidc_Regs *Vidc)
 {
-  /* Call Host-specific routine */
-  DisplayKbd_InitHost(state);
+  state->Display = calloc(sizeof(struct SDD_Name(DisplayInfo)),1);
+  if(!state->Display) {
+    fprintf(stderr,"Failed to allocate DisplayInfo\n");
+    return -1;
+  }
+
+  VIDC = *Vidc;
 
   DC.ModeChanged = 1;
   DC.LastHostWidth = DC.LastHostHeight = DC.LastHostHz = -1;
@@ -1422,10 +1503,50 @@ DisplayKbd_Init(ARMul_State *state)
   DC.FLYBK = 0;
   DC.LineRate = 10000;
   DC.LastVinit = MEMC.Vinit;
+  HD.BorderCol = SDD_Name(Host_GetColour)(state,VIDC.BorderCol);
 
   memset(HOSTDISPLAY.RefreshFlags,~0,sizeof(HOSTDISPLAY.RefreshFlags));
   memset(HOSTDISPLAY.UpdateFlags,0,sizeof(HOSTDISPLAY.UpdateFlags)); /* Initial value in MEMC.UpdateFlags is 1 */   
 
-  /* Schedule update events */
-  EventQ_Insert(state,ARMul_Time+POLLGAP*100,Display_FrameStart);
-} /* DisplayKbd_Init */
+  /* Schedule first update event */
+  EventQ_Insert(state,ARMul_Time+100,SDD_Name(FrameStart));
+
+  return 0;
+}
+
+static void SDD_Name(Shutdown)(ARMul_State *state)
+{
+  free(state->Display);
+  state->Display = NULL;
+}
+
+static void SDD_Name(DAGWrite)(ARMul_State *state,int reg,ARMword val)
+{
+  /* We only care about Vstart & Vend updates. Vinit updates are picked up on at the start of the frame. */
+  switch(reg)
+  {
+  case 1: /* Vstart */
+  case 2: /* Vend */
+    memset(HD.RefreshFlags,0xff,sizeof(HD.RefreshFlags));
+    break;
+  }
+}
+
+const DisplayDev SDD_DisplayDev = {
+  SDD_Name(Init),
+  SDD_Name(Shutdown),
+  SDD_Name(VIDCPutVal),
+  SDD_Name(DAGWrite),
+};
+
+/*
+
+  The end
+
+*/
+
+#undef VideoRelUpdateAndForce
+#undef ROWFUNC_FORCE
+#undef ROWFUNC_UPDATEFLAGS
+#undef ROWFUNC_UPDATED
+

@@ -6,10 +6,6 @@
 #define KEYREENABLEDELAY 1000
 
 /*#define DEBUG_VIDCREGS*/
-/* NOTE: Can't use ARMul's refresh function because it has a small
-   limit on the time delay from posting the event to it executing   */
-/* It's actually decremented once every POLLGAP - that is called
-   with the ARMul scheduler */
 
 #include <stdio.h>
 #include <limits.h>
@@ -23,18 +19,12 @@
 #include "../armdefs.h"
 #include "armarc.h"
 #include "arch/keyboard.h"
-#include "DispKbd.h"
 #include "archio.h"
 #include "hdc63463.h"
-
+#include "../armemu.h"
+#include "arch/displaydev.h"
 
 #include "ControlPane.h"
-
-#define ControlHeight 30
-#define CURSORCOLBASE 250
-
-#define HD HOSTDISPLAY
-#define DC DISPLAYCONTROL
 
 static void UpdateCursorPos(ARMul_State *state);
 static void SelectROScreenMode(int x, int y, int bpp);
@@ -49,6 +39,92 @@ int MonitorBpp;
 #ifndef PROFILE_ENABLED /* Profiling code uses a nasty hack to estimate program size, which will only work if we're using the wimpslot for our heap */
 const char * const __dynamic_da_name = "ArcEm Heap";
 #endif
+
+static const ARMword ModeVarsIn[5] = {
+ 11, /* Width-1 */
+ 12, /* Height-1 */
+ 6, /* Bytes per line */
+ 148, /* Address */
+ -1,
+};
+
+static ARMword ModeVarsOut[4];
+
+/* ------------------------------------------------------------------ */
+
+/* Standard display device */
+
+typedef unsigned short SDD_HostColour;
+#define SDD_Name(x) sdd_##x
+static const int SDD_RowsAtOnce = 1;
+typedef SDD_HostColour *SDD_Row;
+
+
+static SDD_HostColour SDD_Name(Host_GetColour)(ARMul_State *state,unsigned int col)
+{
+  /* Convert to 5-bit component values */
+  int r = (col & 0x00f) << 1;
+  int g = (col & 0x0f0) >> 3;
+  int b = (col & 0xf00) >> 7;
+  /* May want to tweak this a bit at some point? */
+  r |= r>>4;
+  g |= g>>4;
+  b |= b>>4;
+#if 0
+  /* Red/blue swapped Iyonix :( */
+  return (r<<10) | (g<<5) | (b);
+#else
+  return (r) | (g<<5) | (b<<10);
+#endif
+}  
+
+static void SDD_Name(Host_ChangeMode)(ARMul_State *state,int width,int height,int hz);
+
+static inline SDD_Row SDD_Name(Host_BeginRow)(ARMul_State *state,int row,int offset)
+{
+  return ((SDD_Row) (ModeVarsOut[3] + ModeVarsOut[2]*row))+offset;
+}
+
+static inline void SDD_Name(Host_EndRow)(ARMul_State *state,SDD_Row *row) { /* nothing */ };
+
+static inline void SDD_Name(Host_BeginUpdate)(ARMul_State *state,SDD_Row *row,unsigned int count) { /* nothing */ };
+
+static inline void SDD_Name(Host_EndUpdate)(ARMul_State *state,SDD_Row *row) { /* nothing */ };
+
+static inline void SDD_Name(Host_SkipPixels)(ARMul_State *state,SDD_Row *row,unsigned int count) { (*row) += count; }
+
+static inline void SDD_Name(Host_WritePixel)(ARMul_State *state,SDD_Row *row,SDD_HostColour pix) { *(*row)++ = pix; }
+
+static inline void SDD_Name(Host_WritePixels)(ARMul_State *state,SDD_Row *row,SDD_HostColour pix,unsigned int count) { while(count--) *(*row)++ = pix; }
+
+void SDD_Name(Host_PollDisplay)(ARMul_State *state);
+
+#include "../arch/stddisplaydev.c"
+
+static void SDD_Name(Host_ChangeMode)(ARMul_State *state,int width,int height,int hz)
+{
+  /* TODO - Try and change mode
+     For now, just use the current mode */
+  _swix(OS_ReadVduVariables,_INR(0,1),ModeVarsIn,ModeVarsOut);
+  HD.Width = ModeVarsOut[0]+1;
+  HD.Height = ModeVarsOut[1]+1;
+  HD.XScale = 1;
+  HD.YScale = 1;
+  /* Try and detect rectangular pixel modes */
+  if((width >= height*2) && (height*2 <= HD.Height))
+    HD.YScale = 2;
+#if 0 /* Too slow at the moment, mainly due to lame vertical scaling */
+  /* Apply global 2* scaling if possible */
+  if((width*2 <= HD.Width) && (height*(HD.YScale+1) <= HD.Height))
+  {
+    HD.XScale++;
+    HD.YScale++;
+  }
+#endif
+  /* Screen is expected to be cleared */
+  _swix(OS_WriteC,_IN(0),12);
+}
+
 
 /* ------------------------------------------------------------------ */
 
@@ -117,7 +193,7 @@ static void RefreshMouse(ARMul_State *state) {
 
 
 void
-DisplayKbd_PollHostDisplay(ARMul_State *state)
+SDD_Name(Host_PollDisplay)(ARMul_State *state)
 {
   RefreshMouse(state);
 
@@ -137,11 +213,12 @@ DisplayKbd_PollHostDisplay(ARMul_State *state)
 }; /* DisplayKbd_PollHostDisplay */
 
 /*-----------------------------------------------------------------------------*/
-void
-DisplayKbd_InitHost(ARMul_State *state)
+int
+DisplayDev_Init(ARMul_State *state)
 {
 //  SelectROScreenMode(640, 480, 4);
   SelectROScreenMode(800, 600, 4);
+  return DisplayDev_Set(state,&SDD_DisplayDev);
 } /* DisplayKbd_InitHost */
 
 
@@ -325,60 +402,3 @@ static void SelectROScreenMode(int x, int y, int bpp)
   _swi(OS_RemoveCursors, 0);
 }
 
-HostPixel DisplayKbd_HostColour(ARMul_State *state,unsigned int col)
-{
-  /* Convert to 5-bit component values */
-  int r = (col & 0x00f) << 1;
-  int g = (col & 0x0f0) >> 3;
-  int b = (col & 0xf00) >> 7;
-  /* May want to tweak this a bit at some point? */
-  r |= r>>4;
-  g |= g>>4;
-  b |= b>>4;
-#if 0
-  /* Red/blue swapped Iyonix :( */
-  return (r<<10) | (g<<5) | (b);
-#else
-  return (r) | (g<<5) | (b<<10);
-#endif
-}
-
-static const ARMword ModeVarsIn[5] = {
- 11, /* Width-1 */
- 12, /* Height-1 */
- 6, /* Bytes per line */
- 148, /* Address */
- -1,
-};
-
-static ARMword ModeVarsOut[4];
-  
-
-void DisplayKbd_HostChangeMode(ARMul_State *state,int width,int height,int hz)
-{
-  /* TODO - Try and change mode
-     For now, just use the current mode */
-  _swix(OS_ReadVduVariables,_INR(0,1),ModeVarsIn,ModeVarsOut);
-  HD.Width = ModeVarsOut[0]+1;
-  HD.Height = ModeVarsOut[1]+1;
-  HD.XScale = 1;
-  HD.YScale = 1;
-  /* Try and detect rectangular pixel modes */
-  if((width >= height*2) && (height*2 <= HD.Height))
-    HD.YScale = 2;
-#if 0 /* Too slow at the moment, mainly due to lame vertical scaling */
-  /* Apply global 2* scaling if possible */
-  if((width*2 <= HD.Width) && (height*(HD.YScale+1) <= HD.Height))
-  {
-    HD.XScale++;
-    HD.YScale++;
-  }
-#endif
-  /* Screen is expected to be cleared */
-  _swix(OS_WriteC,_IN(0),12);
-}
-
-HostPixel *DisplayKbd_GetScanline(ARMul_State *state,int line)
-{
-  return (HostPixel *) (ModeVarsOut[3] + ModeVarsOut[2]*line);
-}

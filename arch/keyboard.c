@@ -1,7 +1,6 @@
 /* arch/keyboard.c -- a model of the Archimedes keyboard. */
 
 #include "armarc.h"
-#include "DispKbd.h"
 #include "keyboard.h"
 
 #define DEBUG_KEYBOARD 0

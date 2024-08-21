@@ -79,15 +79,16 @@ OBJS = armcopro.o armemu.o arminit.o \
 	armsupp.o main.o dagstandalone.o eventq.o \
 		$(SYSTEM)/DispKbd.o arch/i2c.o arch/archio.o \
     arch/fdc1772.o $(SYSTEM)/ControlPane.o arch/hdc63463.o arch/ReadConfig.o \
-    arch/keyboard.o $(SYSTEM)/filecalls.o arch/DispKbdShared.o \
-    arch/ArcemConfig.o arch/cp15.o arch/newsound.o
+    arch/keyboard.o $(SYSTEM)/filecalls.o \
+    arch/ArcemConfig.o arch/cp15.o arch/newsound.o arch/displaydev.o
 
 SRCS = armcopro.c armemu.c arminit.c arch/armarc.c \
 	armsupp.c main.c dagstandalone.c eventq.c \
 	$(SYSTEM)/DispKbd.c arch/i2c.c arch/archio.c \
 	arch/fdc1772.c $(SYSTEM)/ControlPane.c arch/hdc63463.c \
 	arch/ReadConfig.c arch/keyboard.c $(SYSTEM)/filecalls.c \
-	arch/DispKbdShared.c arch/ArcemConfig.c arch/cp15.c arch/newsound.c
+	arch/ArcemConfig.c arch/cp15.c arch/newsound.c \
+	arch/displaydev.c
 
 INCS = armdefs.h armemu.h $(SYSTEM)/KeyTable.h \
   arch/i2c.h arch/archio.h arch/fdc1772.h arch/ControlPane.h \
@@ -230,7 +231,7 @@ arcem.tar.gz:
 
 # memory models
 
-arch/armarc.o: armdefs.h arch/armarc.c arch/DispKbd.h arch/armarc.h \
+arch/armarc.o: armdefs.h arch/armarc.c arch/armarc.h \
                arch/fdc1772.h
 	$(CC) $(CFLAGS) -c $*.c -o arch/armarc.o
 
@@ -263,17 +264,17 @@ main.o: main.c armdefs.h
 eventq.o: eventq.c eventq.h
 	$(CC) $(CFLAGS) -c $*.c
 
-$(SYSTEM)/DispKbd.o: $(SYSTEM)/DispKbd.c arch/DispKbd.h $(SYSTEM)/KeyTable.h \
+$(SYSTEM)/DispKbd.o: $(SYSTEM)/DispKbd.c $(SYSTEM)/KeyTable.h \
                      arch/armarc.h arch/fdc1772.h arch/hdc63463.h \
                      arch/keyboard.h
 	$(CC) $(CFLAGS) -c $*.c -o $(SYSTEM)/DispKbd.o
 
-arch/i2c.o: arch/i2c.c arch/i2c.h arch/armarc.h arch/DispKbd.h arch/archio.h \
+arch/i2c.o: arch/i2c.c arch/i2c.h arch/armarc.h arch/archio.h \
             arch/fdc1772.h arch/hdc63463.h
 	$(CC) $(CFLAGS) -c $*.c -o arch/i2c.o
 
 arch/archio.o: arch/archio.c arch/archio.h arch/armarc.h arch/i2c.h \
-        arch/DispKbd.h arch/fdc1772.h arch/hdc63463.h
+        arch/fdc1772.h arch/hdc63463.h
 	$(CC) $(CFLAGS) -c $*.c -o arch/archio.o
 
 arch/fdc1772.o: arch/fdc1772.c arch/fdc1772.h arch/armarc.h
@@ -283,10 +284,10 @@ arch/hdc63463.o: arch/hdc63463.c arch/hdc63463.h arch/armarc.h
 	$(CC) $(CFLAGS) -c $*.c -o arch/hdc63463.o
 
 $(SYSTEM)/ControlPane.o: $(SYSTEM)/ControlPane.c arch/ControlPane.h \
-        arch/DispKbd.h arch/armarc.h
+        arch/armarc.h
 	$(CC) $(CFLAGS) -c $*.c -o $(SYSTEM)/ControlPane.o
 
-arch/ReadConfig.o: arch/ReadConfig.c arch/ReadConfig.h arch/DispKbd.h \
+arch/ReadConfig.o: arch/ReadConfig.c arch/ReadConfig.h \
 	arch/armarc.h
 	$(CC) $(CFLAGS) -c $*.c -o arch/ReadConfig.o
 
@@ -295,6 +296,9 @@ arch/keyboard.o: arch/keyboard.c arch/keyboard.h
 
 arch/newsound.o: arch/newsound.c arch/sound.h
 	$(CC) $(CFLAGS) -c $*.c -o arch/newsound.o
+
+arch/displaydev.o: arch/displaydev.c arch/displaydev.h
+	$(CC) $(CFLAGS) -c $*.c -o arch/displaydev.o
 
 win/gui.o: win/gui.rc win/gui.h win/arc.ico
 	windres $*.rc -o win/gui.o

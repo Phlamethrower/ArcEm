@@ -35,6 +35,11 @@ extern ARMul_State statestr;
 
 #define LATEABTSIG LOW /* TODO - is this correct? */
 
+#define MIN(a,b) ((a)<(b)?(a):(b))
+#define MAX(a,b) ((a)>(b)?(a):(b))
+
+#define UPDATEBLOCKSIZE 256
+
 /***************************************************************************\
 *                   Macros to extract instruction fields                    *
 \***************************************************************************/
@@ -197,8 +202,8 @@ typedef enum ARMStartIns {
   RESUME        = 8
 } ARMStartIns;
 
-typedef struct DisplayInfo DisplayInfo;
 typedef struct arch_keyboard arch_keyboard;
+typedef struct Vidc_Regs Vidc_Regs;
 
 #define Exception_IRQ R15IBIT
 #define Exception_FIQ R15FBIT
@@ -212,7 +217,7 @@ struct ARMul_State {
    ARMword Aborted;           /* sticky flag for aborts */
    ARMword AbortAddr;         /* to keep track of Prefetch aborts */
    ARMword Exception;         /* IRQ & FIQ pins */
-   DisplayInfo *Display;      /* VIDC/DisplayInfo struct */
+   Vidc_Regs *Display;        /* VIDC regs/host display struct */
    arch_keyboard *Kbd;        /* Keyboard struct */
    ARMword Bank;              /* the current register bank */
    unsigned NtransSig;        /* MEMC USR/SVC flag, somewhat redundant with FastMapMode */

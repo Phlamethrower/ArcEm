@@ -21,7 +21,6 @@
 
 #include "armarc.h"
 #include "archio.h"
-#include "DispKbd.h"
 #include "archio.h"
 #include "fdc1772.h"
 #include "ReadConfig.h"
@@ -29,6 +28,7 @@
 #include "extnrom.h"
 #include "ArcemConfig.h"
 #include "sound.h"
+#include "displaydev.h"
 
 
 #ifdef MACOSX
@@ -130,12 +130,6 @@ ARMul_MemoryInit(ARMul_State *state)
     default:
       fprintf(stderr, "Unsupported memory size");
       exit(EXIT_FAILURE);
-  }
-
-  state->Display = calloc(sizeof(DisplayInfo), 1);
-  if (state->Display == NULL) {
-    fprintf(stderr,"ARMul_MemoryInit: malloc of DisplayInfo failed\n");
-    exit(3);
   }
 
   dbug("Reading config file....\n");
@@ -254,7 +248,12 @@ ARMul_MemoryInit(ARMul_State *state)
   dbug(" ..Done\n ");
 
   IO_Init(state);
-  DisplayKbd_Init(state);
+
+  if (DisplayDev_Init(state)) {
+    /* There was an error of some sort - it will already have been reported */
+    fprintf(stderr, "Could not initialise display - exiting\n");
+    exit(EXIT_FAILURE);
+  }
 
   if (Sound_Init(state)) {
     /* There was an error of some sort - it will already have been reported */
@@ -480,14 +479,18 @@ static void DMA_PutVal(ARMul_State *state,ARMword address)
 
     switch (RegNum) {
       case 0: /* Vinit */
-        MEMC.Vinit = RegVal;          
+        if(MEMC.Vinit != RegVal)
+        {
+          MEMC.Vinit = RegVal;
+          (DisplayDev_Current->DAGWrite)(state,RegNum,RegVal);
+        }
         break;
 
       case 1: /* Vstart */
         if(MEMC.Vstart != RegVal)
         {
           MEMC.Vstart = RegVal;
-          memset(HOSTDISPLAY.RefreshFlags,0xff,sizeof(HOSTDISPLAY.RefreshFlags));
+          (DisplayDev_Current->DAGWrite)(state,RegNum,RegVal);
         }
         break;
 
@@ -495,12 +498,16 @@ static void DMA_PutVal(ARMul_State *state,ARMword address)
         if(MEMC.Vend != RegVal)
         {
           MEMC.Vend = RegVal;
-          memset(HOSTDISPLAY.RefreshFlags,0xff,sizeof(HOSTDISPLAY.RefreshFlags));
+          (DisplayDev_Current->DAGWrite)(state,RegNum,RegVal);
         }
         break;
 
       case 3: /* Cinit */
-        MEMC.Cinit = RegVal;
+        if(MEMC.Cinit != RegVal)
+        {
+          MEMC.Cinit = RegVal;
+          (DisplayDev_Current->DAGWrite)(state,RegNum,RegVal);
+        }
         break;
 
       case 4: /* Sstart */
@@ -651,7 +658,7 @@ static ARMword FastMap_VIDCFunc(ARMul_State *state, ARMword addr,ARMword data,AR
   }
   if(flags & FASTMAP_ACCESSFUNC_WRITE)
   {
-    VIDC_PutVal(state,addr,data,flags&FASTMAP_ACCESSFUNC_BYTE);
+    (DisplayDev_Current->VIDCPutVal)(state,addr,data,flags&FASTMAP_ACCESSFUNC_BYTE);
     return 0;
   }
   if(MEMC.ROMLow)

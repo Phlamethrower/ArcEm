@@ -5,18 +5,14 @@
 #include "../armdefs.h"
 #include "armarc.h"
 #include "../arch/keyboard.h"
-#include "DispKbd.h"
+#include "displaydev.h"
 #include "win.h"
 #include "KeyTable.h"
+#include "../armemu.h"
 
-
-#define HD HOSTDISPLAY
-#define DC DISPLAYCONTROL
 
 #define MonitorWidth 800
 #define MonitorHeight 600
-
-#define MIN(a,b) ((a)<(b)?(a):(b))
 
 extern unsigned short *dibbmp;
 extern unsigned short *curbmp;
@@ -34,6 +30,69 @@ int oldMouseY = 0;
 static void ProcessKey(ARMul_State *state);
 static void ProcessButton(ARMul_State *state);
 
+
+/* Standard display device */
+
+typedef unsigned short SDD_HostColour;
+#define SDD_Name(x) sdd_##x
+static const int SDD_RowsAtOnce = 1;
+typedef SDD_HostColour *SDD_Row;
+
+
+static SDD_HostColour SDD_Name(Host_GetColour)(ARMul_State *state,unsigned int col)
+{
+  /* Convert to 5-bit component values */
+  int r = (col & 0x00f) << 1;
+  int g = (col & 0x0f0) >> 3;
+  int b = (col & 0xf00) >> 7;
+  /* May want to tweak this a bit at some point? */
+  r |= r>>4;
+  g |= g>>4;
+  b |= b>>4;
+  return (r<<10) | (g<<5) | (b);
+}  
+
+static void SDD_Name(Host_ChangeMode)(ARMul_State *state,int width,int height,int hz);
+
+static inline SDD_Row SDD_Name(Host_BeginRow)(ARMul_State *state,int row,int offset)
+{
+  return &dibbmp[(MonitorHeight-(row+1))*MonitorWidth+offset];
+}
+
+static inline void SDD_Name(Host_EndRow)(ARMul_State *state,SDD_Row *row) { /* nothing */ };
+
+static inline void SDD_Name(Host_BeginUpdate)(ARMul_State *state,SDD_Row *row,unsigned int count) { /* nothing */ };
+
+static inline void SDD_Name(Host_EndUpdate)(ARMul_State *state,SDD_Row *row) { /* nothing */ };
+
+static inline void SDD_Name(Host_SkipPixels)(ARMul_State *state,SDD_Row *row,unsigned int count) { (*row) += count; }
+
+static inline void SDD_Name(Host_WritePixel)(ARMul_State *state,SDD_Row *row,SDD_HostColour pix) { *(*row)++ = pix; }
+
+static inline void SDD_Name(Host_WritePixels)(ARMul_State *state,SDD_Row *row,SDD_HostColour pix,unsigned int count) { while(count--) *(*row)++ = pix; }
+
+void SDD_Name(Host_PollDisplay)(ARMul_State *state);
+
+#include "../arch/stddisplaydev.c"
+
+static void SDD_Name(Host_ChangeMode)(ARMul_State *state,int width,int height,int hz)
+{
+  HD.Width = MIN(width,MonitorWidth);
+  HD.Height = MIN(height,MonitorHeight);
+  HD.XScale = 1;
+  HD.YScale = 1;
+  /* Try and detect rectangular pixel modes */
+  if((width >= height*2) && (height*2 <= MonitorHeight))
+  {
+    HD.YScale = 2;
+    HD.Height *= 2;
+  }
+  resizeWindow(HD.Width,HD.Height);
+  /* Screen is expected to be cleared */
+  memset(dibbmp,0,sizeof(SDD_HostColour)*MonitorWidth*MonitorHeight);
+}
+
+/*-----------------------------------------------------------------------------*/
 
 static void MouseMoved(ARMul_State *state) {
   int xdiff, ydiff;
@@ -86,10 +145,10 @@ static void RefreshMouse(ARMul_State *state) {
   rMouseHeight = Height;
 
   /* Cursor palette */
-  HostPixel cursorPal[4];
+  SDD_HostColour cursorPal[4];
   cursorPal[0] = 0;
   for(x=0; x<3; x++) {
-    cursorPal[x+1] = DisplayKbd_HostColour(state,VIDC.CursorPalette[x]);
+    cursorPal[x+1] = SDD_Name(Host_GetColour)(state,VIDC.CursorPalette[x]);
   }
 
   offset=0;
@@ -194,16 +253,17 @@ static void ProcessButton(ARMul_State *state) {
 } /* ProcessButton */
 
 /*-----------------------------------------------------------------------------*/
-void
-DisplayKbd_InitHost(ARMul_State *state)
+int
+DisplayDev_Init(ARMul_State *state)
 {
   /* Setup display and cursor bitmaps */
   createWindow(MonitorWidth, MonitorHeight);
+  return DisplayDev_Set(state,&SDD_DisplayDev);
 }
 
 /*-----------------------------------------------------------------------------*/
 void
-DisplayKbd_PollHostDisplay(ARMul_State *state)
+SDD_Name(Host_PollDisplay)(ARMul_State *state)
 {
   RefreshMouse(state);
   updateDisplay();
@@ -223,43 +283,5 @@ Kbd_PollHostKbd(ARMul_State *state)
     MouseMoved(state);
   }
   return 0;
-}
-
-/*-----------------------------------------------------------------------------*/
-HostPixel DisplayKbd_HostColour(ARMul_State *state,unsigned int col)
-{
-  /* Convert to 5-bit component values */
-  int r = (col & 0x00f) << 1;
-  int g = (col & 0x0f0) >> 3;
-  int b = (col & 0xf00) >> 7;
-  /* May want to tweak this a bit at some point? */
-  r |= r>>4;
-  g |= g>>4;
-  b |= b>>4;
-  return (r<<10) | (g<<5) | (b);
-}
-
-/*-----------------------------------------------------------------------------*/
-void DisplayKbd_HostChangeMode(ARMul_State *state,int width,int height,int hz)
-{
-  HD.Width = MIN(width,MonitorWidth);
-  HD.Height = MIN(height,MonitorHeight);
-  HD.XScale = 1;
-  HD.YScale = 1;
-  /* Try and detect rectangular pixel modes */
-  if((width >= height*2) && (height*2 <= MonitorHeight))
-  {
-    HD.YScale = 2;
-    HD.Height *= 2;
-  }
-  resizeWindow(HD.Width,HD.Height);
-  /* Screen is expected to be cleared */
-  memset(dibbmp,0,sizeof(HostPixel)*MonitorWidth*MonitorHeight);
-}
-
-/*-----------------------------------------------------------------------------*/
-HostPixel *DisplayKbd_GetScanline(ARMul_State *state,int line)
-{
-  return &dibbmp[(MonitorHeight-(line+1))*MonitorWidth];
 }
 
