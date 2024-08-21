@@ -12,9 +12,9 @@ static void EMFUNCDECL26(BranchLink) (ARMul_State *state, ARMword instr) {
   EMFUNC_CONDTEST
 #ifndef ARMUL_USE_IMMEDTABLE
   /* Do what INCPCAMT does when the immedtable isn't in use. Compiler should spot that they're similar and merge them. */
-  ARMword temp = state->Reg[15];
-  temp = ROTATER(temp,26)-(4<<6);
-  state->Reg[14] = ROTATER(temp,6);
+  ARMword temp2 = state->Reg[15];
+  temp2 = ROTATER(temp2,26)-(4<<6);
+  state->Reg[14] = ROTATER(temp2,6);
 #else
   state->Reg[14] = ((state->Reg[15] - 4) & R15PCBITS) | R15CCINTMODE;
 #endif
