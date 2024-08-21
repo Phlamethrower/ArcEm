@@ -133,9 +133,16 @@ TARGET=!ArcEm/arcem
 endif
 
 ifeq (${SYSTEM},riscos-single)
-EXTNROM_SUPPORT=yes
+# HostFS
 HOSTFS_SUPPORT=yes
+HOSTFS_OBJS = riscos-single/hostfs.o
+# Sound
+SOUND_SUPPORT=yes
+SOUND_PTHREAD=no
+OBJS += riscos-single/soundbuf.o
+# General
 DIRECT_DISPLAY=yes
+EXTNROM_SUPPORT=yes
 CFLAGS += -I@ -DSYSTEM_riscos_single -Iriscos-single -mtune=xscale -march=armv5te -mthrowback
 LDFLAGS += -static
 # Disable stack limit checks. -ffixed-sl required to prevent sl being used as temp storage, breaking unixlib and any other code that does do stack checks
@@ -143,11 +150,10 @@ LDFLAGS += -static
 # No function name poking for a bit extra speed
 CFLAGS += -mno-poke-function-name
 # Debug options
-#CFLAGS += -save-temps -mpoke-function-name
+CFLAGS += -save-temps -mpoke-function-name
 # Profiling
-#CFLAGS += -mpoke-function-name -DPROFILE_ENABLED
+CFLAGS += -mpoke-function-name -DPROFILE_ENABLED
 OBJS += prof.o
-HOSTFS_OBJS = riscos-single/hostfs.o
 TARGET=!ArcEm/arcem
 endif
 
@@ -250,6 +256,9 @@ armemu.o: armemu.c armdefs.h armemu.h armemuinstr.c armemudec.c
 
 prof.o: prof.s
 	$(CC) -x assembler-with-cpp prof.s -c
+
+riscos-single/soundbuf.o: riscos-single/soundbuf.s
+	$(CC) -x assembler-with-cpp riscos-single/soundbuf.s -c -o $@
 
 arminit.o: arminit.c armdefs.h armemu.h
 	$(CC) $(CFLAGS) -c $*.c

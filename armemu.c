@@ -1009,7 +1009,7 @@ PipelineEntry abortpipe = {
 #ifdef PROFILE_ENABLED
 #define MILLION_INSTRUCTIONS 30
 #else
-//#define MILLION_INSTRUCTIONS 50
+#define MILLION_INSTRUCTIONS 50
 #endif
 
 void
@@ -1255,6 +1255,13 @@ ARMul_Emulate26(ARMul_State *state)
         Prof_EndFunc(pipe[2].func);
       }
 
+#ifdef MILLION_INSTRUCTIONS
+      if(!--icount)
+      {
+        kill_emulator = 1;
+        break;
+      }
+#endif
 /* pipeidx = 2 */
       Prof_Begin("Fetch/decode");
       switch (state->NextInstr) {
@@ -1323,6 +1330,13 @@ ARMul_Emulate26(ARMul_State *state)
         Prof_EndFunc(pipe[0].func);
       }
 
+#ifdef MILLION_INSTRUCTIONS
+      if(!--icount)
+      {
+        kill_emulator = 1;
+        break;
+      }
+#endif
 #endif
     } /* for loop */
 

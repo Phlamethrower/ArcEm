@@ -65,8 +65,8 @@ struct MEMCStruct memc;
 
 #ifdef SOUND_SUPPORT
 static SoundData soundTable[256];
-static double channelAmount[8][2];
-static unsigned int numberOfChannels = 0;
+static ARMword channelAmount[8][2];
+/*static*/ unsigned int numberOfChannels = 0;
 #endif
 
 /*-----------------------------------------------------------------------------*/
@@ -896,18 +896,21 @@ SoundDMAFetch(SoundData *buffer, ARMul_State *state)
   if(numberOfChannels==0)
     SoundUpdateStereoImage(state);
 
+  unsigned char *Sptr = (unsigned char *) (MEMC.PhysRam + (MEMC.Sptr/sizeof(ARMword)));
   for (i = 0; i < 16; i += numberOfChannels) {
     int j;
-    double leftTotal = 0;
-    double rightTotal = 0;
+    ARMword leftTotal = 0;
+    ARMword rightTotal = 0;
     for (j = 0; j < numberOfChannels; j++) {
-      unsigned char val = ((unsigned char *) (MEMC.PhysRam + (MEMC.Sptr / sizeof(ARMword))))[i + j];
+      unsigned char val = Sptr[i + j];
 
-      leftTotal  += (signed short int) soundTable[val] * channelAmount[j][0];
-      rightTotal += (signed short int) soundTable[val] * channelAmount[j][1];
+      leftTotal  += channelAmount[j][0] * (signed short int) soundTable[val];
+      rightTotal += channelAmount[j][1] * (signed short int) soundTable[val];
     }
-    buffer[2 * i]       = (SoundData) leftTotal;
-    buffer[(2 * i) + 1] = (SoundData) rightTotal;
+    for(j=0;j<numberOfChannels;j++) {
+      buffer[2 * (i+j)]       = (SoundData) (leftTotal>>16);
+      buffer[(2 * (i+j)) + 1] = (SoundData) (rightTotal>>16);
+    }
   }
 
   MEMC.Sptr += 16;
@@ -1064,34 +1067,34 @@ SoundUpdateStereoImage(ARMul_State *state)
   for (i = 0; i < 8; i++) {
     switch (VIDC.StereoImageReg[i]) {
       /* Centre */
-      case 4: channelAmount[i][0] = 0.5;
-              channelAmount[i][1] = 0.5;
+      case 4: channelAmount[i][0] = (ARMword) (0.5*65536);
+              channelAmount[i][1] = (ARMword) (0.5*65536);
               break;
 
       /* Left 100% */
-      case 1: channelAmount[i][0] = 1.0;
-              channelAmount[i][1] = 0.0;
+      case 1: channelAmount[i][0] = (ARMword) (1.0*65536);
+              channelAmount[i][1] = (ARMword) (0.0*65536);
               break;
       /* Left 83% */
-      case 2: channelAmount[i][0] = 0.83;
-              channelAmount[i][1] = 0.17;
+      case 2: channelAmount[i][0] = (ARMword) (0.83*65536);
+              channelAmount[i][1] = (ARMword) (0.17*65536);
               break;
       /* Left 67% */
-      case 3: channelAmount[i][0] = 0.67;
-              channelAmount[i][1] = 0.33;
+      case 3: channelAmount[i][0] = (ARMword) (0.67*65536);
+              channelAmount[i][1] = (ARMword) (0.33*65536);
               break;
 
       /* Right 100% */
-      case 5: channelAmount[i][1] = 1.0;
-              channelAmount[i][0] = 0.0;
+      case 5: channelAmount[i][1] = (ARMword) (1.0*65536);
+              channelAmount[i][0] = (ARMword) (0.0*65536);
               break;
       /* Right 83% */
-      case 6: channelAmount[i][1] = 0.83;
-              channelAmount[i][0] = 0.17;
+      case 6: channelAmount[i][1] = (ARMword) (0.83*65536);
+              channelAmount[i][0] = (ARMword) (0.17*65536);
               break;
       /* Right 67% */
-      case 7: channelAmount[i][1] = 0.67;
-              channelAmount[i][0] = 0.33;
+      case 7: channelAmount[i][1] = (ARMword) (0.67*65536);
+              channelAmount[i][0] = (ARMword) (0.33*65536);
               break;
     }
 
