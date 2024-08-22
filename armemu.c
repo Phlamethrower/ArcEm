@@ -40,6 +40,12 @@ static ARMEmuFunc* pDecFunc;    /* But they are invalidated by word/byte write t
 static ARMEmuFunc* pLoadedFunc; /* So that a fetched instruction followed by an overwrite of its location   */
                         /* doesn't get its function pointer overwritten by the original instruction */
 
+/* Zaurus specific - to allow control to break out of ARMul_Emulate26() and return to Qt */
+#ifdef SYSTEM_zaurus
+int zaurus_cycle_count=0;
+extern int ZAURUS_CYCLE_LIMIT;
+#endif
+
 /***************************************************************************\
 *                   Load Instruction                                        *
 \***************************************************************************/
@@ -1461,6 +1467,18 @@ ARMul_Emulate26(void)
 
       /*fprintf(stderr, "exec: pc=0x%08x instr=0x%08x\n", pc, instr);*/
       instrfunc(instr, pc);
+
+#ifdef SYSTEM_zaurus
+      zaurus_cycle_count++;
+      if(zaurus_cycle_count > ZAURUS_CYCLE_LIMIT)
+      {
+        zaurus_cycle_count = 0;
+        statestr.decoded = decoded;
+        statestr.loaded = loaded;
+        statestr.pc = pc;
+        return;
+      }
+#endif      
     } /* for loop */
 
     statestr.decoded = decoded;

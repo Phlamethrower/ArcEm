@@ -140,7 +140,11 @@ void ARMul_Reset(ARMul_State *state)
 ARMword ARMul_DoProg(ARMul_State *state) {
   ARMword pc = 0;
 
+#ifndef SYSTEM_zaurus
   ARMul_Emulate26();
+#else
+  zaurus_execute();
+#endif
   return(pc);
 }
 

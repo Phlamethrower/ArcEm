@@ -142,6 +142,17 @@ CFLAGS += -DSYSTEM_X -I/usr/X11R6/include
 LIBS += -L/usr/X11R6/lib -lXext -lX11
 endif
 
+ifeq (${SYSTEM},zaurus)
+CC=arm-linux-gcc
+CXX=arm-linux-g++
+LD=$(CC)
+CFLAGS += -I$(QPEDIR)/include -I$(QTDIR)/include -DSYSTEM_zaurus
+CXXFLAGS = $(CFLAGS) -DQT_QWS_EBX -DQT_QWS_CUSTOM -DQWS -fno-exceptions -fno-rtti -DNO_DEBUG
+LIBS += -L$(QTDIR)/lib -lqpe -lqte
+SRCS += zaurus/qtinterface.cc zaurus/qtinterface_moc.cc
+OBJS += zaurus/qtinterface.o zaurus/qtinterface_moc.o
+endif
+
 ifeq (${SYSTEM},win)
 CFLAGS += -DSYSTEM_win -mno-cygwin
 OBJS += win/gui.o win/win.o
@@ -217,6 +228,24 @@ arcem.tar.gz:
 	tar cf arcem.tar arcem-$(VER)
 	gzip arcem.tar
 	mv arcem.tar.gz arcem-$(VER).tar.gz
+
+# Zaurus ipk construction - needs the ipkg-build.sh script to be in the parent directory.
+# This is ugly, but easier than messing with my QEMU build scripts. Long story :P
+arcem_1.0.0_arm.ipk: arcem
+	rm -rf zaurus/ipk
+	mkdir -p zaurus/ipk/opt/QtPalmtop/apps/Applications
+	cp zaurus/arcem.desktop zaurus/ipk/opt/QtPalmtop/apps/Applications
+	mkdir -p zaurus/ipk/opt/QtPalmtop/bin
+	cp zaurus/arcem zaurus/ipk/opt/QtPalmtop/bin
+	mkdir -p zaurus/ipk/CONTROL
+	cp zaurus/control zaurus/ipk/CONTROL
+	mkdir -p zaurus/ipk/opt/QtPalmtop/pics
+	cp zaurus/arcem.png zaurus/ipk/opt/QtPalmtop/pics
+	mkdir -p zaurus/ipk/opt/QtPalmtop/share/arcem
+	cp arcem zaurus/ipk/opt/QtPalmtop/share/arcem
+	cp hexcmos zaurus/ipk/opt/QtPalmtop/share/arcem
+	cp arcemrc zaurus/ipk/opt/QtPalmtop/share/arcem
+	. ../ipkg-build.sh zaurus/ipk
 
 # memory models
 
@@ -304,5 +333,7 @@ arch/keyboard.o: arch/keyboard.c arch/keyboard.h
 win/gui.o: win/gui.rc win/gui.h win/arc.ico
 	windres $*.rc -o win/gui.o
 
+zaurus/qtinterface_moc.cc: zaurus/qtinterface.h
+	moc -o zaurus/qtinterface_moc.cc zaurus/qtinterface.h
 
 # DO NOT DELETE

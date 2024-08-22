@@ -35,6 +35,9 @@ int ReadConfigFile(ARMul_State *state) {
 #ifdef AMIGA
   nameConf = (char *)&".arcemrc";
 #else
+#ifdef SYSTEM_zaurus
+  nameConf = "/opt/QtPalmtop/share/arcem/arcemrc";
+#else
 
   if (HomeVar==NULL) {
     fprintf(stderr,"Couldn't read $HOME and thus couldn't load config file\n");
@@ -51,6 +54,7 @@ int ReadConfigFile(ARMul_State *state) {
 #else
   sprintf(nameConf, "%s/arcem/arcemrc", HomeVar);
 #endif /* !MACOSX */
+#endif /* zaurus */
 #endif /* AMIGA */
 #endif
 

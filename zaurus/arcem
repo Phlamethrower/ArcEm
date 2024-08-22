@@ -1,0 +1,5 @@
+#!/bin/bash
+# Start ArcEm
+# Using lowercase 'rom' for the rom name, to allow arcem to be installed on FAT SD/CF cards (since Linux shows 8.3 filenames in lowercase)
+cd /opt/QtPalmtop/share/arcem
+./arcem --rom rom

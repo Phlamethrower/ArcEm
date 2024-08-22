@@ -1,0 +1,12 @@
+Package: arcem
+Priority: optional
+Section: qpe/applications
+Version: 1.0.0
+Architecture: arm
+Maintainer: Jeffrey Lee <me@phlamethrower.co.uk>
+Depends: qpe-base
+License: GPL
+Cardinst: enable
+Description: ARM Emulator
+ Simple Qt port of ArcEm.
+ Very slow!

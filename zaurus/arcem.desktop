@@ -1,0 +1,8 @@
+[Desktop Entry]
+Comment=ARM emulator
+Exec=arcem
+Icon=arcem.png
+Type=Application
+Name=ArcEm
+Display=640x480/144dpi,480x640/144dpi
+CanFastLoad=0
